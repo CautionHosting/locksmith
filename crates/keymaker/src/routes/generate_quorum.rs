@@ -12,26 +12,10 @@ use openpgp::{
     serialize::Serialize as _,
     types::KeyFlags,
 };
-use std::{collections::HashMap, panic::Location};
+use std::panic::Location;
 use tracing::{debug, warn};
 
-#[derive(serde::Deserialize)]
-pub struct GenerateQuorumRequest {
-    label: HashMap<String, String>,
-    threshold: u8,
-    max: u8,
-    keyring: String,
-}
-
-#[derive(serde::Serialize)]
-pub struct GenerateQuorumResponse {
-    label: HashMap<String, String>,
-    keyring: String,
-    keyring_hash: Vec<u8>,
-    shardfile: Vec<u8>,
-    secret_recipient_public_key: Vec<u8>,
-    necroproof: Vec<u8>,
-}
+use keymaker_models::generate_quorum::{GenerateQuorumRequest, GenerateQuorumResponse};
 
 fn hash_keyring(keyring: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
@@ -109,7 +93,7 @@ impl FromContexts for GenerateQuorumError {
     type ShortLivedContext = GenerateQuorumErrorKind;
 
     fn from_contexts(
-        long_lived_ctx: Self::LongLivedContext,
+        _long_lived_ctx: Self::LongLivedContext,
         short_lived_ctx: Self::ShortLivedContext,
         location: &'static Location<'static>,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -156,13 +140,13 @@ pub async fn generate_quorum(
     use GenerateQuorumErrorKind as ErrorKind;
     let keyring_hash = hash_keyring(keyring.as_bytes());
 
-    debug!(?label, ?threshold, ?max, ?keyring);
+    debug!(?label, ?threshold, ?max, ?keyring_hash);
     keyfork_entropy::ensure_safe();
 
     let certs = parse_certs(&keyring).with_contexts((), GenerateQuorumErrorKind::ParseCerts)?;
 
     let opgp = OpenPGP;
-    let entropy: [u8; 64] =
+    let entropy: [u8; 32] =
         keyfork_entropy::generate_entropy_of_const_size().with_contexts((), ErrorKind::Entropy)?;
 
     let mut shardfile = vec![];

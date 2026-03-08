@@ -1461,6 +1461,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "keymaker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dterror",
+ "keyfork-derive-openpgp 0.2.0",
+ "keyfork-derive-path-data",
+ "keyfork-entropy",
+ "keyfork-mnemonic",
+ "keyfork-shard",
+ "keymaker-models",
+ "reqwest",
+ "sequoia-openpgp",
+ "serde",
+ "serde_json",
+ "sha2",
+ "structstruck",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "keymaker-client"
+version = "0.1.0"
+dependencies = [
+ "keymaker-models",
+ "reqwest",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "keymaker-models"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2",
+]
+
+[[package]]
 name = "lalrpop"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1561,31 +1606,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
-]
-
-[[package]]
-name = "locksmith"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "dterror",
- "keyfork-derive-openpgp 0.2.0",
- "keyfork-derive-path-data",
- "keyfork-entropy",
- "keyfork-mnemonic",
- "keyfork-shard",
- "reqwest",
- "sequoia-openpgp",
- "serde",
- "serde_json",
- "sha2",
- "structstruck",
- "thiserror 2.0.18",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -2195,6 +2215,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -2858,9 +2880,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.49.0"
+version = "1.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a2903cd7736441aac9df9d7688bd0ce48edccaadf181c3b90be801e81d3d86"
+checksum = "27ad5e34374e03cfffefc301becb44e9dc3c17584f414349ebe29ed26661822d"
 dependencies = [
  "bytes",
  "libc",

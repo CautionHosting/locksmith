@@ -1,5 +1,5 @@
 use axum::{Router, routing};
-use tracing::{debug, info, error};
+use tracing::{info, error};
 use tokio::net::TcpListener;
 
 mod middleware;
@@ -32,10 +32,10 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
 
     let listen_addr =
         std::env::var("KEYMAKER_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    debug!(%listen_addr, "binding listener");
+    info!(%listen_addr, "binding listener");
     let listener = TcpListener::bind(&listen_addr).await?;
 
-    debug!("serving keymaker server");
+    info!("serving keymaker server");
     axum::serve(listener, app).await?;
 
     Ok(())
