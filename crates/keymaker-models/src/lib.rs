@@ -14,8 +14,8 @@ pub mod generate_quorum {
         pub label: HashMap<String, String>,
         pub keyring: String,
         pub keyring_hash: Vec<u8>,
-        pub shardfile: Vec<u8>,
-        pub secret_recipient_public_key: Vec<u8>,
+        pub shardfile: String,
+        pub secret_recipient_public_key: String,
         pub necroproof: Vec<u8>,
     }
 }

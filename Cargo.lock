@@ -1484,6 +1484,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "zalloc",
 ]
 
 [[package]]
@@ -3739,6 +3740,15 @@ dependencies = [
  "quote",
  "syn",
  "synstructure",
+]
+
+[[package]]
+name = "zalloc"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6573e1a2893f553c24a9e9b9ca7929bf916b8f039613ebc107349fd099dfb4e4"
+dependencies = [
+ "zeroize",
 ]
 
 [[package]]

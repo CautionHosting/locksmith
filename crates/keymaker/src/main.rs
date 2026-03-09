@@ -1,9 +1,13 @@
 use axum::{Router, routing};
-use tracing::{info, error};
 use tokio::net::TcpListener;
+use tracing::{error, info};
 
 mod middleware;
 mod routes;
+
+#[global_allocator]
+static ALLOC: zalloc::ZeroizingAlloc<std::alloc::System> =
+    zalloc::ZeroizingAlloc(std::alloc::System);
 
 #[tracing::instrument]
 fn main() {
@@ -24,7 +28,10 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", routing::get(routes::health::health))
-        .route("/generate_quorum", routing::post(routes::generate_quorum::generate_quorum))
+        .route(
+            "/generate_quorum",
+            routing::post(routes::generate_quorum::generate_quorum),
+        )
         .layer(axum::middleware::from_fn(
             middleware::error_handling::error_logger_middleware,
         ))

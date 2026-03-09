@@ -149,8 +149,8 @@ pub async fn generate_quorum(
     let entropy: [u8; 32] =
         keyfork_entropy::generate_entropy_of_const_size().with_contexts((), ErrorKind::Entropy)?;
 
-    let mut shardfile = vec![];
-    opgp.shard_and_encrypt(threshold, max, &entropy, &*certs, &mut shardfile)
+    let mut shardfile_bytes = vec![];
+    opgp.shard_and_encrypt(threshold, max, &entropy, &*certs, &mut shardfile_bytes)
         .map_err(|source| {
             warn!("untraceable shard error: {source}");
             GenerateQuorumError {
@@ -159,6 +159,9 @@ pub async fn generate_quorum(
                 location: Location::caller(),
             }
         })?;
+
+    let shardfile =
+        String::try_from(shardfile_bytes).expect("should always get utf8 encoded bytes");
 
     let userid = UserID::from("Keymaker-generated key");
     let mnemonic = keyfork_mnemonic::Mnemonic::from_array(entropy);
@@ -187,9 +190,9 @@ pub async fn generate_quorum(
     )
     .with_contexts((), ErrorKind::DeriveOpenPGPCert)?;
 
-    let mut secret_recipient_public_key = vec![];
+    let mut secret_recipient_public_key_bytes = vec![];
     let mut armored = openpgp::armor::Writer::new(
-        &mut secret_recipient_public_key,
+        &mut secret_recipient_public_key_bytes,
         openpgp::armor::Kind::PublicKey,
     )
     .with_contexts((), ErrorKind::SerializeOpenPGPCert)?;
@@ -204,12 +207,15 @@ pub async fn generate_quorum(
         .finalize()
         .with_contexts((), ErrorKind::SerializeOpenPGPCert)?;
 
+    let secret_recipient_public_key = String::try_from(secret_recipient_public_key_bytes)
+        .expect("should always get valid utf8 from armor");
+
     Ok(Json(GenerateQuorumResponse {
         label,
         keyring,
         keyring_hash,
         shardfile,
-        secret_recipient_public_key: vec![],
+        secret_recipient_public_key,
         necroproof: vec![],
     }))
 }
