@@ -15,7 +15,7 @@ pub mod generate_quorum {
         pub keyring: String,
         pub keyring_hash: Vec<u8>,
         pub shardfile: String,
-        pub secret_recipient_public_key: String,
+        pub public_key: String,
         pub necroproof: Vec<u8>,
     }
 }

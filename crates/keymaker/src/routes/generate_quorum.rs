@@ -207,7 +207,7 @@ pub async fn generate_quorum(
         .finalize()
         .with_contexts((), ErrorKind::SerializeOpenPGPCert)?;
 
-    let secret_recipient_public_key = String::try_from(secret_recipient_public_key_bytes)
+    let public_key = String::try_from(secret_recipient_public_key_bytes)
         .expect("should always get valid utf8 from armor");
 
     Ok(Json(GenerateQuorumResponse {
@@ -215,7 +215,7 @@ pub async fn generate_quorum(
         keyring,
         keyring_hash,
         shardfile,
-        secret_recipient_public_key,
+        public_key,
         necroproof: vec![],
     }))
 }

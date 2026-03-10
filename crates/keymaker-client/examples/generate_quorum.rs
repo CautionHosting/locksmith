@@ -15,5 +15,5 @@ async fn main() {
     let filename = "shardfile.asc";
     eprintln!("persisting shard response to disk at: {filename}");
     std::fs::write(filename, response.shardfile).unwrap();
-    println!("{cert}", cert=response.secret_recipient_public_key);
+    println!("{cert}", cert=response.public_key);
 }
