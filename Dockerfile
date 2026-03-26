@@ -28,5 +28,8 @@ EOF
 
 FROM stagex/core-filesystem AS package
 COPY --from=build /rootfs/ /
-COPY bundle.json /
+ADD bundle.json /
+ADD /etc/environment <<EOF
+RUST_LOG=debug
+EOF
 ENTRYPOINT ["/usr/bin/locksmithd"]
