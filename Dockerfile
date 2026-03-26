@@ -10,9 +10,12 @@ COPY --from=user-pcsc-lite . /
 
 COPY . /locksmith
 WORKDIR /locksmith
-RUN cargo fetch
+RUN --mount=type=cache,target=/root/.cargo cargo fetch
 ENV RUSTFLAGS="-C codegen-units=1 -C target-feature=+crt-static"
-RUN --network=none <<-EOF
+RUN --network=none \
+	--mount=type=cache,target=/root/.cargo \
+	--mount=type=cache,target=/locksmith/target \
+	<<-EOF
 	ARCH="$(uname -m)"
 	cargo build \
 		--frozen \

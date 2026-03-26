@@ -1,7 +1,7 @@
 use blahaj::{Share, Sharks};
 use bootproof::format::{Format, nitro::Nitro};
 use dterror::*;
-use std::panic::Location;
+use std::{panic::Location, time::SystemTime};
 use structstruck::strike;
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error};
@@ -48,6 +48,36 @@ impl FromContexts for ReceiveShardsError {
     }
 }
 
+#[derive(Debug)]
+struct RequestStub {
+    bytes: [u8; 4]
+}
+
+impl std::fmt::Display for RequestStub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for byte in &self.bytes {
+            write!(f, "{byte:X}")?;
+        }
+        Ok(())
+    }
+}
+
+impl RequestStub {
+    fn new() -> Self {
+        let mut bytes = [0u8; 4];
+
+        let time_bytes = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("time is linear")
+            .as_nanos()
+            .to_be_bytes();
+
+        bytes.copy_from_slice(&time_bytes[12..]);
+
+        Self { bytes }
+    }
+}
+
 // TODO: Make its own error type.
 #[tracing::instrument(skip_all)]
 async fn server(
@@ -86,15 +116,16 @@ async fn server(
             }
         };
 
-        tokio::spawn(handle_client(client, tx.clone()));
+        tokio::spawn(handle_client(client, tx.clone(), RequestStub::new()));
     }
 }
 
 // TODO: Make its own error type.
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(skip_all, fields(%request_stub))]
 async fn handle_client(
     mut client: tokio::net::TcpStream,
     tx: tokio::sync::mpsc::Sender<Payload>,
+    request_stub: RequestStub,
 ) -> Result<(), ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
