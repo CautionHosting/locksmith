@@ -28,3 +28,4 @@ EOF
 
 FROM stagex/core-filesystem AS package
 COPY --from=build /rootfs/ /
+ENTRYPOINT ["/usr/bin/locksmithd"]
