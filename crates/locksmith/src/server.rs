@@ -10,16 +10,22 @@ use hkdf::Hkdf;
 use keymaker_models::generate_quorum::GenerateQuorumResponse;
 use sha2::Sha256;
 use std::panic::Location;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::SystemTime;
 use structstruck::strike;
 use tracing::{debug, error};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
-pub type Payload = (Vec<u8>, u8);
+#[derive(Debug, Clone)]
+struct Payload {
+    request: models::SendShardRequest,
+    request_stub: RequestStub,
+}
 
-type ArcU8 = Arc<AtomicU8>;
+#[derive(Debug, Clone)]
+struct ReconstitutionStatus {
+    remaining: u8,
+    request_stub: RequestStub,
+}
 
 strike! {
     #[structstruck::each[derive(Debug)]]
@@ -43,6 +49,7 @@ strike! {
             DecryptPayload,
             JsonDecodePayload,
             AddShard,
+            SyncShardReconstitutionStatus,
         },
         location: &'static Location<'static>,
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -67,7 +74,7 @@ impl FromContexts for ReceiveShardsError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RequestStub {
     bytes: [u8; 4],
 }
@@ -103,7 +110,7 @@ async fn server(
     address: std::net::SocketAddr,
     bundle: GenerateQuorumResponse,
     tx: tokio::sync::mpsc::Sender<Payload>,
-    reconstituted_amount: ArcU8,
+    broadcast_tx: tokio::sync::broadcast::Sender<ReconstitutionStatus>,
 ) -> Result<(), ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
@@ -141,7 +148,7 @@ async fn server(
             client,
             bundle.clone(),
             tx.clone(),
-            reconstituted_amount.clone(),
+            broadcast_tx.subscribe(),
             RequestStub::new(),
         ));
     }
@@ -153,7 +160,7 @@ async fn handle_client(
     mut client: tokio::net::TcpStream,
     bundle: GenerateQuorumResponse,
     tx: tokio::sync::mpsc::Sender<Payload>,
-    reconstituted_amount: ArcU8,
+    mut broadcast_rx: tokio::sync::broadcast::Receiver<ReconstitutionStatus>,
     request_stub: RequestStub,
 ) -> Result<(), ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
@@ -253,11 +260,27 @@ async fn handle_client(
     let decoded_payload: models::SendShardRequest = serde_json::from_slice(&decrypted_payload)
         .with_contexts((), ErrorKind::JsonDecodePayload)?;
 
-    tx.send((decoded_payload.shard, decoded_payload.threshold))
-        .await
-        .with_contexts((), ErrorKind::AddShard)?;
+    tx.send(Payload {
+        request: decoded_payload,
+        request_stub,
+    })
+    .await
+    .with_contexts((), ErrorKind::AddShard)?;
 
-    let remaining = decoded_payload.threshold - reconstituted_amount.load(Ordering::SeqCst);
+    // TODO: Provide a broadcast channel for the shard receiver to send back the status of how many
+    // remain. It also means we can remove the AtomicU8, since the receiver can broadcast a
+    // combination of { request: RequestStub, remaining: u8 }
+
+    let remaining = loop {
+        let status = broadcast_rx
+            .recv()
+            .await
+            .with_contexts((), ErrorKind::SyncShardReconstitutionStatus)?;
+        debug!(?status, "received status");
+        if status.request_stub == request_stub {
+            break status.remaining;
+        }
+    };
 
     debug!(remaining, "sending response to user");
     crate::send(
@@ -274,7 +297,7 @@ async fn handle_client(
 #[tracing::instrument(skip_all)]
 async fn reconstitute_shards(
     mut rx: tokio::sync::mpsc::Receiver<Payload>,
-    reconstituted_amount: ArcU8,
+    broadcast_tx: tokio::sync::broadcast::Sender<ReconstitutionStatus>,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
@@ -283,13 +306,24 @@ async fn reconstitute_shards(
     while shards.len() < usize::from(threshold) {
         debug!("awaiting new shard");
         let shard;
-        (shard, threshold) = rx.recv().await.ok_or(ReceiveShardsError {
+        let request_stub;
+        Payload {
+            request: models::SendShardRequest { shard, threshold },
+            request_stub,
+        } = rx.recv().await.ok_or(ReceiveShardsError {
             kind: ErrorKind::NoMoreShards,
             location: Location::caller(),
             source: None,
         })?;
         shards.push(shard);
-        reconstituted_amount.fetch_add(1, Ordering::SeqCst);
+        broadcast_tx
+            .send(ReconstitutionStatus {
+                remaining: threshold.saturating_sub(
+                    u8::try_from(shards.len()).expect("shards.len() is always < u8 threshold"),
+                ),
+                request_stub,
+            })
+            .with_contexts((), ErrorKind::SyncShardReconstitutionStatus)?;
     }
 
     let shares = shards
@@ -317,23 +351,22 @@ pub async fn receive_shards(
     address: std::net::SocketAddr,
     bundle: &GenerateQuorumResponse,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
-    use ReceiveShardsErrorKind as ErrorKind;
-
     // Payloads are: shard || threshold
     let (tx, rx) = tokio::sync::mpsc::channel::<Payload>(255);
-
-    let reconstituted_amount = ArcU8::new(0.into());
+    let (reconstitution_tx, reconstitution_rx) =
+        tokio::sync::broadcast::channel::<ReconstitutionStatus>(255);
 
     let server_handle = tokio::spawn(server(
         address,
         bundle.clone(),
         tx,
-        reconstituted_amount.clone(),
+        reconstitution_tx.clone(),
     ));
-    let data = reconstitute_shards(rx, reconstituted_amount).await?;
+    let data = reconstitute_shards(rx, reconstitution_tx).await?;
 
     // once we have enough shards, we should no longer accept new clients.
     server_handle.abort();
+    drop(reconstitution_rx);
 
     Ok(data)
 }
