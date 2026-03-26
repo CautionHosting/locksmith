@@ -12,8 +12,6 @@ async fn main() {
     };
 
     let response = client.generate_quorum(request).await.unwrap();
-    let filename = "shardfile.asc";
-    eprintln!("persisting shard response to disk at: {filename}");
-    std::fs::write(filename, response.shardfile).unwrap();
-    println!("{cert}", cert=response.public_key);
+    let encoded = serde_json::to_string(&response).expect("could serialize json");
+    std::fs::write("bundle.json", encoded).expect("could write bundle");
 }
