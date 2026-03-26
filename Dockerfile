@@ -28,4 +28,5 @@ EOF
 
 FROM stagex/core-filesystem AS package
 COPY --from=build /rootfs/ /
+COPY bundle.json /
 ENTRYPOINT ["/usr/bin/locksmithd"]

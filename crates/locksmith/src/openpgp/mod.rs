@@ -57,12 +57,14 @@ strike! {
     #[derive(thiserror::Error)]
     #[error("could not verify message ({kind:?}) [{location}]")]
     pub struct VerifyError {
-        kind: #[non_exhaustive] pub enum VerifyErrorKind {
+        pub kind: #[non_exhaustive] pub enum VerifyErrorKind {
             IncompatibleDrift,
             LoadCertificates,
             InvalidSignatureCount,
             LoadSignatures,
-            SignData,
+            AllSignaturesInvalid {
+                validation_errors: Vec<String>,
+            }
         },
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -97,6 +99,10 @@ cfg_if::cfg_if! {
         pub use minipgp6::*;
     } else {
         pub fn sign(certs: &str, data: &str) -> Result<String, SignError> {
+            unimplemented!("neither rpgpie nor minipgp6 backend were selected");
+        }
+
+        pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), VerifyError> {
             unimplemented!("neither rpgpie nor minipgp6 backend were selected");
         }
     }

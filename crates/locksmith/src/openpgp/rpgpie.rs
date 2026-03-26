@@ -248,6 +248,9 @@ pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), V
         });
     };
 
+    let mut has_valid_signature = false;
+    let mut validation_errors = vec![];
+
     for cert in certificates {
         if let Some(creation_timestamp) = signature.created() {
             // verify that the certificate is valid when the signature was created
@@ -255,14 +258,27 @@ pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), V
             // should we? having to update a bundle would lead to misreproduction in enclaves.
 
             // NOTE: rpgpie does not verify that certificates are valid at time of signature
-            let verifications = cert
+            for verification in cert
                 .valid_signing_capable_component_keys_at(creation_timestamp)
                 .into_iter()
                 .map(|verifier| verifier.verify(signature, data.as_bytes()))
-                .collect::<Vec<_>>();
-            dbg!(verifications);
+            {
+                if let Err(e) = verification {
+                    validation_errors.push(e.to_string());
+                } else {
+                    has_valid_signature = true;
+                }
+            }
         }
     }
 
-    todo!("verify the fricken thing; time: {now:#?}")
+    if !has_valid_signature {
+        return Err(VerifyError {
+            kind: VerifyErrorKind::AllSignaturesInvalid { validation_errors },
+            source: None,
+            location: Location::caller(),
+        })
+    }
+
+    return Ok(())
 }

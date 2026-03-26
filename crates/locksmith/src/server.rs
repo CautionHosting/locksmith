@@ -1,13 +1,25 @@
+use crate::models;
+use aes_gcm::{
+    Aes256Gcm, KeyInit, Nonce,
+    aead::{Aead, consts::U12},
+};
 use blahaj::{Share, Sharks};
 use bootproof::format::{Format, nitro::Nitro};
 use dterror::*;
-use std::{panic::Location, time::SystemTime};
+use hkdf::Hkdf;
+use keymaker_models::generate_quorum::GenerateQuorumResponse;
+use sha2::Sha256;
+use std::panic::Location;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::SystemTime;
 use structstruck::strike;
-use tokio::io::AsyncWriteExt;
 use tracing::{debug, error};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 pub type Payload = (Vec<u8>, u8);
+
+type ArcU8 = Arc<AtomicU8>;
 
 strike! {
     #[structstruck::each[derive(Debug)]]
@@ -20,10 +32,17 @@ strike! {
             NoMoreShards,
             InvalidShare,
             RecoverShards,
-            ReceiveFirstPayload,
-            DeserializeFirstPayload,
+            ReceiveRequest,
+            SendResponse,
             GenerateAttestation,
-            SendSecondPayload,
+            FailedSendRejection,
+            InvalidSignature,
+            DeserializeSignedPayload,
+            HkdfExpansionInvalid,
+            HexDecodePayload,
+            DecryptPayload,
+            JsonDecodePayload,
+            AddShard,
         },
         location: &'static Location<'static>,
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -50,7 +69,7 @@ impl FromContexts for ReceiveShardsError {
 
 #[derive(Debug)]
 struct RequestStub {
-    bytes: [u8; 4]
+    bytes: [u8; 4],
 }
 
 impl std::fmt::Display for RequestStub {
@@ -82,7 +101,9 @@ impl RequestStub {
 #[tracing::instrument(skip_all)]
 async fn server(
     address: std::net::SocketAddr,
+    bundle: GenerateQuorumResponse,
     tx: tokio::sync::mpsc::Sender<Payload>,
+    reconstituted_amount: ArcU8,
 ) -> Result<(), ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
@@ -95,7 +116,7 @@ async fn server(
     let mut previous_error: Option<std::io::Error> = None;
     loop {
         debug!("polling for client");
-        let (client, addr) = match server.accept().await {
+        let (client, _addr) = match server.accept().await {
             Ok((client, addr)) => {
                 previous_error = None;
                 debug!(?addr, "accepting new client");
@@ -116,7 +137,13 @@ async fn server(
             }
         };
 
-        tokio::spawn(handle_client(client, tx.clone(), RequestStub::new()));
+        tokio::spawn(handle_client(
+            client,
+            bundle.clone(),
+            tx.clone(),
+            reconstituted_amount.clone(),
+            RequestStub::new(),
+        ));
     }
 }
 
@@ -124,19 +151,19 @@ async fn server(
 #[tracing::instrument(skip_all, fields(%request_stub))]
 async fn handle_client(
     mut client: tokio::net::TcpStream,
+    bundle: GenerateQuorumResponse,
     tx: tokio::sync::mpsc::Sender<Payload>,
+    reconstituted_amount: ArcU8,
     request_stub: RequestStub,
 ) -> Result<(), ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
     let secret = EphemeralSecret::random();
-    let request_bytes = keyfork_frame::asyncext::try_decode_from(&mut client)
+    let request: models::GeneratePublicKeyRequest = crate::receive(&mut client)
         .await
-        .with_contexts((), ErrorKind::ReceiveFirstPayload)?;
-    let request: crate::models::GeneratePublicKeyRequest =
-        serde_json::from_slice(&request_bytes)
-            .with_contexts((), ErrorKind::DeserializeFirstPayload)?;
+        .with_contexts((), ErrorKind::ReceiveRequest)?;
 
+    debug!("generating attestation");
     let attestation = Nitro
         .generate(
             Some(&PublicKey::from(&secret).as_bytes()[..]),
@@ -148,22 +175,106 @@ async fn handle_client(
             source: Some(source),
         })?;
 
-    let response = crate::models::GeneratePublicKeyResponse { attestation };
-    let response_string = serde_json::to_string(&response).expect("response is serializable");
-    let framed_response = keyfork_frame::try_encode(response_string.as_bytes())
-        .expect("response is < u32::MAX bytes");
-    client
-        .write_all(&framed_response)
-        .await
-        .with_contexts((), ErrorKind::SendSecondPayload)?;
+    let request: models::SendSignedEncryptedShardRequest = crate::send_and_receive(
+        &mut client,
+        models::GeneratePublicKeyResponse { attestation },
+    )
+    .await
+    .with_contexts((), ErrorKind::ReceiveRequest)?;
 
-    todo!()
+    debug!("verifying signed request from user");
+    let signed_request = match crate::openpgp::verify_detached(
+        &bundle.keyring,
+        &request.signed_payload,
+        &request.signature,
+    ) {
+        Ok(()) => {
+            debug!("accepting signature from user");
+            let decoded: models::SendEncryptedShardRequest =
+                serde_json::from_str(&request.signed_payload)
+                    .with_contexts((), ErrorKind::DeserializeSignedPayload)?;
+            decoded
+        }
+        Err(source) => {
+            error!("denying signature from user");
+            let mut error_messages = match &source.kind {
+                crate::openpgp::VerifyErrorKind::AllSignaturesInvalid { validation_errors } => {
+                    validation_errors.clone()
+                }
+                _ => vec![],
+            };
+
+            error_messages.insert(0, "No matching certificate found for signature".into());
+
+            crate::send(
+                &mut client,
+                models::SendSignedEncryptedShardResponse::Rejected {
+                    reason: error_messages.join("\n- "),
+                },
+            )
+            .await
+            .with_contexts((), ErrorKind::FailedSendRejection)?;
+            return Err(ReceiveShardsError {
+                kind: ReceiveShardsErrorKind::InvalidSignature,
+                location: Location::caller(),
+                source: Some(source.into()),
+            });
+        }
+    };
+
+    // TODO: If any of the following fails, the client will not be notified.
+    // Ideally we should move this into its own function and do a similar matching pattern as to
+    // what we do above.
+    let shared_secret = secret.diffie_hellman(&PublicKey::from(signed_request.public_key));
+    assert!(
+        shared_secret.was_contributory(),
+        "shared secret might be insecure"
+    );
+    let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+
+    let mut shared_key_data = [0u8; 256 / 8];
+    hkdf.expand(b"key", &mut shared_key_data)
+        .with_contexts((), ErrorKind::HkdfExpansionInvalid)?;
+    let shared_key =
+        Aes256Gcm::new_from_slice(&shared_key_data).expect("known static length is valid");
+
+    let mut nonce_data = [0u8; 12];
+    hkdf.expand(b"nonce", &mut nonce_data)
+        .with_contexts((), ErrorKind::HkdfExpansionInvalid)?;
+    let nonce = Nonce::<U12>::from_slice(&nonce_data);
+
+    let decoded_encrypted_payload = smex::decode_to_vec(&signed_request.encrypted_payload)
+        .with_contexts((), ErrorKind::HexDecodePayload)?;
+
+    let decrypted_payload = shared_key
+        .decrypt(nonce, decoded_encrypted_payload.as_slice())
+        .with_contexts((), ErrorKind::DecryptPayload)?;
+
+    let decoded_payload: models::SendShardRequest = serde_json::from_slice(&decrypted_payload)
+        .with_contexts((), ErrorKind::JsonDecodePayload)?;
+
+    tx.send((decoded_payload.shard, decoded_payload.threshold))
+        .await
+        .with_contexts((), ErrorKind::AddShard)?;
+
+    let remaining = decoded_payload.threshold - reconstituted_amount.load(Ordering::SeqCst);
+
+    debug!(remaining, "sending response to user");
+    crate::send(
+        &mut client,
+        models::SendSignedEncryptedShardResponse::Accepted { remaining },
+    )
+    .await
+    .with_contexts((), ErrorKind::SendResponse)?;
+
+    Ok(())
 }
 
 // TODO: Make its own error type.
 #[tracing::instrument(skip_all)]
 async fn reconstitute_shards(
     mut rx: tokio::sync::mpsc::Receiver<Payload>,
+    reconstituted_amount: ArcU8,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
@@ -178,6 +289,7 @@ async fn reconstitute_shards(
             source: None,
         })?;
         shards.push(shard);
+        reconstituted_amount.fetch_add(1, Ordering::SeqCst);
     }
 
     let shares = shards
@@ -201,14 +313,24 @@ async fn reconstitute_shards(
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn receive_shards(address: std::net::SocketAddr) -> Result<Vec<u8>, ReceiveShardsError> {
+pub async fn receive_shards(
+    address: std::net::SocketAddr,
+    bundle: &GenerateQuorumResponse,
+) -> Result<Vec<u8>, ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
     // Payloads are: shard || threshold
     let (tx, rx) = tokio::sync::mpsc::channel::<Payload>(255);
 
-    let server_handle = tokio::spawn(server(address, tx));
-    let data = reconstitute_shards(rx).await?;
+    let reconstituted_amount = ArcU8::new(0.into());
+
+    let server_handle = tokio::spawn(server(
+        address,
+        bundle.clone(),
+        tx,
+        reconstituted_amount.clone(),
+    ));
+    let data = reconstitute_shards(rx, reconstituted_amount).await?;
 
     // once we have enough shards, we should no longer accept new clients.
     server_handle.abort();
