@@ -51,3 +51,4 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tokio = { version = "1.50.0", features = ["macros", "net", "rt-multi-thread"] }
 keyfork-frame = { version = "0.1.1", registry = "distrust" }
 aes-gcm = "0.10.3"
+keyforkd = { version = "0.1.5", registry = "distrust" }

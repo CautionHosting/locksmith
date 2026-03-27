@@ -28,7 +28,8 @@ EOF
 
 FROM stagex/core-filesystem AS package
 COPY --from=build /rootfs/ /
-ADD bundle.json /
+ADD .caution/secrets/bundle.json /etc/caution/
+ADD .caution/secrets/API_KEY.asc /etc/caution/
 ADD <<EOF /etc/environment
 RUST_LOG=debug
 EOF
