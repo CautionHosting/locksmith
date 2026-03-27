@@ -28,7 +28,7 @@ EOF
 
 FROM stagex/core-filesystem AS package
 COPY --from=build /rootfs/ /
-ADD bundle-double.json /bundle.json
+ADD bundle-2-of-4.json /bundle.json
 ADD <<EOF /etc/environment
 RUST_LOG=debug
 EOF

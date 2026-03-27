@@ -4,10 +4,11 @@ use keymaker_models::generate_quorum::GenerateQuorumResponse;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let address = std::env::args().skip(1).next().expect("pass in socket address please");
-    dbg!(&address);
+    let mut args = std::env::args().skip(1);
+    let address = args.next().expect("pass in socket address please");
+    let bundlefile = args.next().unwrap_or_else(|| "bundle.json".into());
 
-    let bundle_text = std::fs::read_to_string("bundle.json").expect("has bundle");
+    let bundle_text = std::fs::read_to_string(bundlefile).expect("has bundle");
     let bundle: GenerateQuorumResponse = serde_json::from_str(&bundle_text).expect("valid json");
     let status = locksmith::client::send_shard(
         address.parse().expect("should pass IP:port, probably port 8080"),
