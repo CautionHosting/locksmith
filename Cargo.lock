@@ -2260,6 +2260,7 @@ name = "locksmith"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "anyhow",
  "blahaj",
  "bootproof",
  "bootproof-sdk",

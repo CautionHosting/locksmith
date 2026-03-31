@@ -14,7 +14,7 @@ RUN <<-EOF
 EOF
 RUN --network=none <<-EOF
 	ARCH="$(uname -m)"
-  RUSTFLAGS="-C target-feature=+crt-static" \
+	RUSTFLAGS="-C target-feature=+crt-static" \
 	cargo build \
 		--frozen \
 		--release \
