@@ -222,6 +222,7 @@ pub fn sign(
 // is valid.
 pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), VerifyError> {
     use VerifyErrorKind as ErrorKind;
+    // TODO: make use of this in combination with creation timestamp
     let now = std::time::SystemTime::now()
         .checked_sub(std::time::Duration::from_secs(60))
         .ok_or(VerifyError {

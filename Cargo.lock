@@ -854,6 +854,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "daemonize"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab8bfdaacb3c887a54d41bdf48d3af8873b3f5566469f8ba21b92057509f116e"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2257,18 +2266,25 @@ dependencies = [
  "card-backend",
  "card-backend-pcsc",
  "cfg-if",
+ "daemonize",
  "dterror",
+ "ed25519-dalek",
  "hkdf",
+ "keyfork-derive-openpgp",
+ "keyfork-derive-path-data",
  "keyfork-frame",
+ "keyfork-mnemonic",
  "keyfork-prompt",
  "keyfork-shard",
  "keyforkd",
+ "keyforkd-client",
  "keymaker-models",
  "openpgp-card 0.6.1",
  "openpgp-card-rpgp",
  "pgp",
  "rand 0.8.5",
  "rpgpie",
+ "sequoia-openpgp",
  "serde",
  "serde_bytes",
  "serde_cbor",
