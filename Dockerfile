@@ -12,6 +12,9 @@ COPY . /locksmith
 WORKDIR /locksmith
 RUN --mount=type=cache,target=/root/.cargo cargo fetch
 ENV RUSTFLAGS="-C codegen-units=1 -C target-feature=+crt-static"
+# LOAD BEARING
+# We get nettle_cnd_memcpy not found sometimes without this.
+ENV NETTLE_STATIC=1
 RUN --network=none \
 	--mount=type=cache,target=/root/.cargo \
 	--mount=type=cache,target=/locksmith/target \
@@ -29,7 +32,7 @@ RUN --network=none \
 		--bin locksmith-oneshot
 	mkdir -p /rootfs/usr/bin
 	cp target/${ARCH}-unknown-linux-musl/release/locksmithd /rootfs/usr/bin
-	# cp target/${ARCH}-unknown-linux-musl/release/locksmith-oneshot /rootfs/usr/bin
+	cp target/${ARCH}-unknown-linux-musl/release/locksmith-oneshot /rootfs/usr/bin
 	cp test.sh /rootfs/usr/bin/test-locksmith
 EOF
 
