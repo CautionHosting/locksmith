@@ -40,7 +40,7 @@ EOF
 FROM stagex/core-filesystem@sha256:da28831927652291b0fa573092fd41c8c96ca181ea224df7bff40e1833c3db13 AS package
 COPY --from=build /rootfs/ /
 COPY --from=core-busybox . /
-ADD bundle-2-of-4.json /etc/caution/bundle.json
+ADD bundle-single.json /etc/caution/bundle.json
 ADD secrets /etc/caution/secrets
 # TODO: where put keyforkd?
 ADD <<EOF /etc/environment
