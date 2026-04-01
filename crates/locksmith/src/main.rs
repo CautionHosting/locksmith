@@ -19,5 +19,14 @@ async fn main() {
         ]),
         &bundle,
     ).await.expect("could send shard");
-    dbg!(status);
+
+    match status {
+        locksmith::models::SendSignedEncryptedShardResponse::Accepted { remaining } => {
+            eprintln!("Shard accepted, {remaining} remaining shards until reconstitution");
+        }
+        locksmith::models::SendSignedEncryptedShardResponse::Rejected { reason } => {
+            eprintln!("Unable to send shard: {reason}");
+            std::process::exit(1);
+        }
+    }
 }

@@ -63,7 +63,7 @@ strike! {
             InvalidSignatureCount,
             LoadSignatures,
             AllSignaturesInvalid {
-                validation_errors: Vec<String>,
+                validation_errors: Vec<Box<dyn std::error::Error + Send + Sync + 'static>>,
             }
         },
         #[source]

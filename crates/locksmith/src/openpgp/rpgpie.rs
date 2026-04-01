@@ -265,7 +265,7 @@ pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), V
                 .map(|verifier| verifier.verify(signature, data.as_bytes()))
             {
                 if let Err(e) = verification {
-                    validation_errors.push(e.to_string());
+                    validation_errors.push(e.into());
                 } else {
                     has_valid_signature = true;
                 }

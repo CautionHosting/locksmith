@@ -9,6 +9,7 @@ use dterror::*;
 use hkdf::Hkdf;
 use keymaker_models::generate_quorum::GenerateQuorumResponse;
 use sha2::Sha256;
+use std::fmt::Write;
 use std::panic::Location;
 use std::time::SystemTime;
 use structstruck::strike;
@@ -204,19 +205,30 @@ async fn handle_client(
         }
         Err(source) => {
             error!("denying signature from user");
-            let mut error_messages = match &source.kind {
-                crate::openpgp::VerifyErrorKind::AllSignaturesInvalid { validation_errors } => {
-                    validation_errors.clone()
+            let mut error_messages = vec![];
+            if let crate::openpgp::VerifyErrorKind::AllSignaturesInvalid { validation_errors } =
+                &source.kind
+            {
+                for error in validation_errors {
+                    let mut indentation = 0;
+                    error_messages.push(format!("- {error}"));
+                    let mut source = error.source();
+                    while let Some(new_source) = source {
+                        indentation += 1;
+                        let mut prefix = "  ".repeat(indentation);
+                        write!(prefix, "- {new_source}").expect("can concat error");
+                        error_messages.push(prefix + new_source.to_string().as_str());
+                        source = new_source.source();
+                    }
                 }
-                _ => vec![],
             };
 
-            error_messages.insert(0, "No matching certificate found for signature".into());
+            error_messages.insert(0, "No matching certificate found for signature:".into());
 
             crate::send(
                 &mut client,
                 models::SendSignedEncryptedShardResponse::Rejected {
-                    reason: error_messages.join("\n- "),
+                    reason: error_messages.join("\n"),
                 },
             )
             .await
