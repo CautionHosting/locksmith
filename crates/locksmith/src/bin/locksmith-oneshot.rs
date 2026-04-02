@@ -54,11 +54,12 @@ impl DecryptionHelper for &SingleCertKeyring {
             &sequoia_openpgp::crypto::SessionKey,
         ) -> bool,
     {
-        // NOTE: Why is this required.
         let null = NullPolicy::new();
         for pkesk in pkesks {
             let recipient = pkesk.recipient();
+            eprintln!("checking valid keys matching: {recipient}");
             if recipient.is_wildcard() || self.tsk.keys().any(|key| &key.keyid() == recipient) {
+                eprintln!("any key in TSK matches");
                 for key in self
                     .tsk
                     .keys()
@@ -66,6 +67,7 @@ impl DecryptionHelper for &SingleCertKeyring {
                     .for_storage_encryption()
                     .secret()
                 {
+                    eprintln!("valid key is: {key_fp}", key_fp = key.fingerprint());
                     let secret_key = key.key().clone();
                     let mut keypair = if secret_key.has_unencrypted_secret() {
                         secret_key
