@@ -3,6 +3,7 @@
 echo "starting locksmithd"
 /usr/bin/locksmithd
 echo "locksmithd finished, starting oneshot"
-source <(/usr/bin/locksmith-oneshot)
+output="$(/usr/bin/locksmith-oneshot)"
+eval "$output"
 env
 sleep 100000
