@@ -29,7 +29,7 @@ async fn run_server(mnemonic: Mnemonic) {
 
 fn main() {
     // NOTE: tracing_subscriber might not be thread safe
-    // tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::init();
 
     // SAFETY: Before daemonizing, all threads should be joined. This will be done by the time
     // tokio::main returns.
