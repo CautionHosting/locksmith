@@ -15,9 +15,9 @@ use keyfork_derive_openpgp::openpgp::{
 use keyfork_derive_path_data::paths;
 use keyforkd_client::Client;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::ffi::OsString;
 
 pub struct SingleCertKeyring {
     tsk: Cert,
@@ -163,6 +163,7 @@ fn main() {
     let userid = UserID::from("Ephemeral Locksmith TSK");
     let tsk = keyfork_derive_openpgp::derive(&derived_xprv, &subkeys, &userid)
         .expect("should be able to derive key");
+    eprintln!("derived tsk with fingerprint: {}", tsk.fingerprint());
 
     let entries = std::fs::read_dir("/etc/caution/secrets")
         .expect("should be able to read /etc/caution/secrets");
