@@ -32,8 +32,8 @@ RUN --network=none \
 		--target "${ARCH}-unknown-linux-musl" \
 		--bin locksmith-oneshot
 	mkdir -p /rootfs/usr/bin
-	cp target/${ARCH}-unknown-linux-musl/release/locksmithd /rootfs/usr/bin/locksmithd2
-	cp target/${ARCH}-unknown-linux-musl/release/locksmith-oneshot /rootfs/usr/bin/locksmith-oneshot2
+	cp target/${ARCH}-unknown-linux-musl/release/locksmithd /rootfs/usr/bin
+	cp target/${ARCH}-unknown-linux-musl/release/locksmith-oneshot /rootfs/usr/bin
 	cp test.sh /rootfs/usr/bin/test-locksmith
 EOF
 
