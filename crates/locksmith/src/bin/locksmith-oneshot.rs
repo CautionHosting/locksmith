@@ -14,7 +14,10 @@ use keyfork_derive_openpgp::openpgp::{
 };
 use keyfork_derive_path_data::paths;
 use keyforkd_client::Client;
+use std::collections::HashMap;
 use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::ffi::OsString;
 
 pub struct SingleCertKeyring {
     tsk: Cert,
@@ -86,6 +89,52 @@ impl DecryptionHelper for &SingleCertKeyring {
     }
 }
 
+fn decrypt_secret(
+    keyring: &SingleCertKeyring,
+    path: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let policy = NullPolicy::new();
+    let mut decryptor = DecryptorBuilder::from_file(path)?.with_policy(&policy, None, keyring)?;
+    let mut secret = vec![];
+    decryptor.read_to_end(&mut secret)?;
+    let secret_str = String::from_utf8(secret)?;
+
+    Ok(secret_str)
+}
+
+fn decrypt_secrets(
+    keyring: SingleCertKeyring,
+    paths: &[PathBuf],
+) -> Result<HashMap<OsString, String>, Vec<Box<dyn std::error::Error>>> {
+    let mut errors = vec![];
+    let secrets: HashMap<OsString, String> = HashMap::new();
+
+    let mut secrets = HashMap::new();
+    for path in paths {
+        let secret_name = path
+            .with_extension("")
+            .file_name()
+            .expect("should have valid path; entry.file_name() existed")
+            .to_owned();
+
+        let secret = match decrypt_secret(&keyring, path) {
+            Ok(o) => o,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
+
+        secrets.insert(secret_name, secret);
+    }
+
+    if !errors.is_empty() {
+        Err(errors)
+    } else {
+        Ok(secrets)
+    }
+}
+
 fn main() {
     let derivation_path = paths::OPENPGP
         .clone()
@@ -128,27 +177,15 @@ fn main() {
         }
     }
 
-    let helper = SingleCertKeyring { tsk };
-    let mut secrets = std::collections::HashMap::new();
-    for path in paths {
-        let secret_name = path
-            .with_extension("")
-            .file_name()
-            .expect("should have valid path; entry.file_name() existed")
-            .to_owned();
-        let policy = NullPolicy::new();
-        let mut decryptor = DecryptorBuilder::from_file(path)
-            .expect("can has builder")
-            .with_policy(&policy, None, &helper)
-            .expect("can has decryptor");
-        let mut secret = vec![];
-        decryptor
-            .read_to_end(&mut secret)
-            .expect("can has decryption");
-
-        let secret_str = String::from_utf8(secret).expect("UTF-8 encoded secret");
-        secrets.insert(secret_name, secret_str);
-    }
+    let secrets = match decrypt_secrets(SingleCertKeyring { tsk }, &paths) {
+        Ok(o) => o,
+        Err(errors) => {
+            for error in errors {
+                eprintln!("{error:?}");
+            }
+            return;
+        }
+    };
 
     for (name, value) in secrets {
         println!(
