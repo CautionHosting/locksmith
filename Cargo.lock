@@ -2291,6 +2291,7 @@ dependencies = [
  "serde_cbor",
  "serde_json",
  "sha2",
+ "shlex",
  "smex 0.2.1",
  "structstruck",
  "thiserror 2.0.18",

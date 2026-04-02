@@ -192,9 +192,9 @@ fn main() {
 
     for (name, value) in secrets {
         println!(
-            "export {name}={value_trimmed}",
+            "export {name}={value_quoted}",
             name = name.to_str().expect("name is UTF-8"),
-            value_trimmed = value.trim()
+            value_quoted = shlex::try_quote(value.trim()).expect("no nul bytes in UTF-8 str")
         );
     }
 }
