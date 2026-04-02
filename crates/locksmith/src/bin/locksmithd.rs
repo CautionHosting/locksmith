@@ -7,7 +7,7 @@ async fn get_shards() -> Vec<u8> {
     let bundle: GenerateQuorumResponse = serde_json::from_str(&bundle_text).expect("valid json");
 
     let reconstituted_secret = locksmith::server::receive_shards(
-        "0.0.0.0:8085".parse().expect("known address can be parsed"),
+        "0.0.0.0:8084".parse().expect("known address can be parsed"),
         &bundle,
     )
     .await
