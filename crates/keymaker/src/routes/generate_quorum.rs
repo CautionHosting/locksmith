@@ -1,4 +1,4 @@
-use axum::{Json, http::StatusCode};
+use axum::{Json, extract::State, http::StatusCode};
 use dterror::*;
 use keyfork_derive_openpgp::derive_util as derive;
 use keyfork_shard::{
@@ -13,8 +13,10 @@ use openpgp::{
     types::KeyFlags,
 };
 use std::panic::Location;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
+use crate::AppState;
 use keymaker_models::generate_quorum::{GenerateQuorumRequest, GenerateQuorumResponse};
 
 fn hash_keyring(keyring: &[u8]) -> Vec<u8> {
@@ -130,6 +132,7 @@ impl axum::response::IntoResponse for GenerateQuorumError {
 #[axum::debug_handler]
 #[tracing::instrument(skip_all)]
 pub async fn generate_quorum(
+    State(app_state): State<Arc<AppState>>,
     Json(GenerateQuorumRequest {
         label,
         threshold,
@@ -137,6 +140,25 @@ pub async fn generate_quorum(
         keyring,
     }): Json<GenerateQuorumRequest>,
 ) -> Result<Json<GenerateQuorumResponse>, GenerateQuorumError> {
+    #[cfg(feature = "selfnuke")]
+    tokio::task::spawn({
+        // NOTE: The system should be terminated after this route has been called, regardless of
+        // whether it was successful or not. We set a deadline of 10 seconds to complete the
+        // operation and send the response to the client before rebooting. No one else will be able
+        // to obtain a reboot permit, as we purposefully forget the permit without releasing it.
+        let reboot_permit = app_state
+            .reboot_permit
+            .acquire()
+            .await
+            .expect("semaphore is never closed");
+        std::mem::forget(reboot_permit);
+        async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT)
+                .expect("should be able to reboot system");
+        }
+    });
+
     use GenerateQuorumErrorKind as ErrorKind;
     let keyring_hash = hash_keyring(keyring.as_bytes());
 

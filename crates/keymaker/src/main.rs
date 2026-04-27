@@ -1,6 +1,8 @@
 use axum::{Router, routing};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tracing::{error, info};
+use std::sync::Arc;
 
 mod middleware;
 mod routes;
@@ -8,6 +10,18 @@ mod routes;
 #[global_allocator]
 static ALLOC: zalloc::ZeroizingAlloc<std::alloc::System> =
     zalloc::ZeroizingAlloc(std::alloc::System);
+
+pub struct AppState {
+    pub reboot_permit: Semaphore,
+}
+
+impl AppState {
+    fn new() -> Self {
+        Self {
+            reboot_permit: Semaphore::new(1),
+        }
+    }
+}
 
 #[tracing::instrument]
 fn main() {
@@ -35,7 +49,8 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         .layer(axum::middleware::from_fn(
             middleware::error_handling::error_logger_middleware,
         ))
-        .layer(tower_http::trace::TraceLayer::new_for_http());
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .with_state(Arc::new(AppState::new()));
 
     let listen_addr =
         std::env::var("KEYMAKER_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());

@@ -186,7 +186,7 @@ checksum = "d92c1f4471b33f6a7af9ea421b249ed18a11c71156564baf6293148fa6ad1b09"
 dependencies = [
  "libc",
  "log",
- "nix",
+ "nix 0.26.4",
  "serde",
  "serde_bytes",
  "serde_cbor",
@@ -2112,6 +2112,7 @@ dependencies = [
  "keyfork-mnemonic",
  "keyfork-shard",
  "keymaker-models",
+ "nix 0.31.2",
  "reqwest",
  "sequoia-openpgp",
  "serde",
@@ -2437,6 +2438,18 @@ dependencies = [
  "libc",
  "memoffset",
  "pin-utils",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d6d0705320c1e6ba1d912b5e37cf18071b6c2e9b7fa8215a1e8a7651966f5d3"
+dependencies = [
+ "bitflags 2.11.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
