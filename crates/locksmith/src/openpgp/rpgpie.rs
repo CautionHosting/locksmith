@@ -15,6 +15,7 @@ use pgp::{
 use rpgpie::{
     certificate::{Certificate, Checked},
     lookup::CertificateIndex,
+    message::SignatureMode,
 };
 use std::panic::Location;
 
@@ -101,6 +102,7 @@ pub fn sign(
     certs: &str,
     data: &str,
     prompt: &mut dyn keyfork_prompt::PromptHandler,
+    opt_private_key_path: Option<&std::path::Path>,
 ) -> Result<String, SignError> {
     use SignErrorKind as ErrorKind;
 
@@ -110,6 +112,79 @@ pub fn sign(
         .map(Checked::from)
         .collect::<Vec<_>>();
 
+    let index = CertificateIndex::index_as_data_signer(&certificates);
+
+    // Try TSK-based signing if a private key path was provided.
+    if let Some(private_key_path) = opt_private_key_path {
+        let mut file = std::fs::File::open(private_key_path).map_err(|e| SignError {
+            kind: ErrorKind::LoadPrivateKeys,
+            source: Some(Box::new(e)),
+            location: Location::caller(),
+        })?;
+        let tsks = rpgpie::tsk::Tsk::load(&mut file).map_err(|e| SignError {
+            kind: ErrorKind::LoadPrivateKeys,
+            source: Some(Box::new(e)),
+            location: Location::caller(),
+        })?;
+
+        for tsk in &tsks {
+            let cert = rpgpie::certificate::Certificate::from(tsk.clone());
+            let checked = Checked::from(cert);
+
+            let Some(cert_algos) = checked.preferred_hash_algo(pgp::types::Timestamp::now()) else {
+                continue;
+            };
+            let hash_algo = match rpgpie::policy::PREFERRED_HASH_ALGORITHMS
+                .iter()
+                .find(|algo| cert_algos.contains(algo))
+            {
+                Some(algo) => *algo,
+                None => continue,
+            };
+
+            for data_signer in tsk.signing_capable_component_keys() {
+                let fp = data_signer.fingerprint();
+                if index.lookup_fingerprint(&fp).is_empty() {
+                    continue;
+                }
+
+                let ssk = tsk.as_signed_secret_key();
+                let is_encrypted = ssk.primary_key.secret_params().is_encrypted()
+                    || ssk
+                        .secret_subkeys
+                        .iter()
+                        .any(|s| s.secret_params().is_encrypted());
+                let key_pw = if is_encrypted {
+                    let password = keyfork_prompt::prompt_validated_passphrase(
+                        prompt,
+                        &format!("Unlock private key ({fp})\n\nPassword: "),
+                        3,
+                        Ok::<String, Box<dyn std::error::Error>>,
+                    )
+                    .with_contexts((), ErrorKind::PromptPrivateKeyPassword)?;
+                    pgp::types::Password::from(password)
+                } else {
+                    pgp::types::Password::empty()
+                };
+
+                let signature = data_signer
+                    .sign_data(data.as_bytes(), SignatureMode::Text, &key_pw, hash_algo)
+                    .map_err(|e| SignError {
+                        kind: ErrorKind::SignData,
+                        source: Some(Box::new(e)),
+                        location: Location::caller(),
+                    })?;
+                let mut signature_armored_bytes = vec![];
+                rpgpie::signature::save(&[signature], true, &mut signature_armored_bytes)
+                    .with_contexts((), ErrorKind::EncodeSignedData)?;
+
+                return Ok(String::from_utf8(signature_armored_bytes)
+                    .expect("ASCII armored values are always utf8"));
+            }
+        }
+    }
+
+    // No matching TSK found; fall through to smartcard path.
     let (mut card, hash_algo) = match find_open_cards_by_certs(&certificates) {
         Ok(Some(o)) => o,
         Ok(None) => {
@@ -278,8 +353,8 @@ pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), V
             kind: VerifyErrorKind::AllSignaturesInvalid { validation_errors },
             source: None,
             location: Location::caller(),
-        })
+        });
     }
 
-    return Ok(())
+    return Ok(());
 }

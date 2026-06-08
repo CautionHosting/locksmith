@@ -142,6 +142,7 @@ pub async fn send_shard(
     // NOTE: This code is very error prone and only incidentally works.
     // It is not dyn compatible.
     let opt_private_keys = opt_private_key_path
+        .as_deref()
         .map(OpenPGP::discover_certs)
         .transpose()
         .with_contexts((), ErrorKind::ParsePrivateKeys)?;
@@ -176,6 +177,7 @@ pub async fn send_shard(
         &bundle.keyring,
         &send_encrypted_shard_request,
         &mut **temp_ph.lock().expect("unpoisoned mutex"),
+        opt_private_key_path.as_deref(),
     )
     .with_contexts((), ErrorKind::SignHexEncodedRecryptedShard)?;
 

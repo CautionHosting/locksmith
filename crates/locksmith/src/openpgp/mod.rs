@@ -27,6 +27,8 @@ strike! {
             InitCardSlot,
             SignData,
             EncodeSignedData,
+            LoadPrivateKeys,
+            PromptPrivateKeyPassword,
         },
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -98,7 +100,11 @@ cfg_if::cfg_if! {
         mod minipgp6;
         pub use minipgp6::*;
     } else {
-        pub fn sign(certs: &str, data: &str) -> Result<String, SignError> {
+        pub fn sign(
+            certs: &str,
+            data: &str,
+            opt_private_key_path: Option<&std::path::Path>,
+        ) -> Result<String, SignError> {
             unimplemented!("neither rpgpie nor minipgp6 backend were selected");
         }
 
