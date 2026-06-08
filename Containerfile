@@ -21,5 +21,7 @@ RUN --network=none <<-EOF
 		--target "${ARCH}-unknown-linux-musl" \
 		--bin keymaker
 EOF
+RUN printf 'KEYFORK_OPENPGP_EXPIRE=42y\n' > /etc/environment
 FROM scratch AS runtime
+COPY --from=build /etc/environment /etc/environment
 COPY --from=build /target/*-unknown-linux-musl/release/keymaker /
