@@ -28,6 +28,7 @@ strike! {
         kind: pub enum SendShardErrorKind {
             ConnectToRemote,
             ParseShardfile,
+            ParsePrivateKeys,
             DecryptShard,
             SendRequest,
             InvalidPCRs,
@@ -67,6 +68,7 @@ pub async fn send_shard(
     address: std::net::SocketAddr,
     pcrs: std::collections::HashMap<u8, Vec<u8>>,
     bundle: &keymaker_models::generate_quorum::GenerateQuorumResponse,
+    opt_private_key_path: Option<std::path::PathBuf>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
     use SendShardErrorKind as ErrorKind;
 
@@ -137,8 +139,14 @@ pub async fn send_shard(
     let messages = OpenPGP
         .parse_shard_file(bundle.shardfile.as_bytes())
         .with_contexts((), ErrorKind::ParseShardfile)?;
+    // NOTE: This code is very error prone and only incidentally works.
+    // It is not dyn compatible.
+    let opt_private_keys = opt_private_key_path
+        .map(OpenPGP::discover_certs)
+        .transpose()
+        .with_contexts((), ErrorKind::ParsePrivateKeys)?;
     let (share, threshold) = OpenPGP
-        .decrypt_one_shard(None, &messages, temp_ph.clone())
+        .decrypt_one_shard(opt_private_keys, &messages, temp_ph.clone())
         .with_contexts((), ErrorKind::DecryptShard)?;
 
     // Create the encrypted payload

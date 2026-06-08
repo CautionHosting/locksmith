@@ -18,6 +18,7 @@ async fn main() {
             (2, smex::decode_to_vec("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").expect("valid hex")),
         ]),
         &bundle,
+        None,
     ).await.expect("could send shard");
 
     match status {
