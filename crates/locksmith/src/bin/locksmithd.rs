@@ -1,5 +1,5 @@
-use keymaker_models::generate_quorum::GenerateQuorumResponse;
 use keyfork_mnemonic::Mnemonic;
+use keymaker_models::generate_quorum::GenerateQuorumResponse;
 
 #[tokio::main]
 async fn get_shards() -> Vec<u8> {
@@ -7,7 +7,9 @@ async fn get_shards() -> Vec<u8> {
     let bundle: GenerateQuorumResponse = serde_json::from_str(&bundle_text).expect("valid json");
 
     let reconstituted_secret = locksmith::server::receive_shards(
-        "0.0.0.0:49504".parse().expect("known address can be parsed"),
+        "0.0.0.0:49504"
+            .parse()
+            .expect("known address can be parsed"),
         &bundle,
     )
     .await
@@ -24,7 +26,9 @@ async fn get_shards_test_util() -> Vec<u8> {
 
 #[tokio::main]
 async fn run_server(mnemonic: Mnemonic) {
-    keyforkd::start_and_run_server(mnemonic).await.expect("could start keyforkd");
+    keyforkd::start_and_run_server(mnemonic)
+        .await
+        .expect("could start keyforkd");
 }
 
 fn main() {
@@ -37,9 +41,11 @@ fn main() {
     // let secret = get_shards_test_util();
     let secret = get_shards();
 
-    daemonize::Daemonize::new().start().expect("could not fork to background");
+    daemonize::Daemonize::new()
+        .start()
+        .expect("could not fork to background");
 
-    let mnemonic = Mnemonic::try_from_slice(&secret)
-        .expect("reconstituted secret was of valid length");
+    let mnemonic =
+        Mnemonic::try_from_slice(&secret).expect("reconstituted secret was of valid length");
     run_server(mnemonic);
 }

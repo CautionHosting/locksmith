@@ -34,10 +34,23 @@ fn try_open_card(
     Ok((card, fpr))
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("no hash algorithms were valid on certificate {fpr}")]
-pub struct NoHashAlgo {
-    fpr: Fingerprint,
+/// Hash used for signing when a certificate declares no preferred-hash subpacket
+/// (or none we accept). SHA-512 is rpgpie's top preference and is supported by
+/// the smartcards and key types we use.
+const DEFAULT_HASH_ALGORITHM: HashAlgorithm = HashAlgorithm::Sha512;
+
+/// Choose the signing hash for a certificate: its most-preferred hash that we
+/// also accept, falling back to [`DEFAULT_HASH_ALGORITHM`] when the cert declares
+/// no preferred-hash subpacket (e.g. keyfork-generated certs) or none we accept.
+fn select_signing_hash(cert_algos: Option<&[HashAlgorithm]>) -> HashAlgorithm {
+    cert_algos
+        .and_then(|cert_algos| {
+            rpgpie::policy::PREFERRED_HASH_ALGORITHMS
+                .iter()
+                .find(|algo| cert_algos.contains(algo))
+                .copied()
+        })
+        .unwrap_or(DEFAULT_HASH_ALGORITHM)
 }
 
 fn find_open_cards_by_certs(
@@ -65,29 +78,10 @@ fn find_open_cards_by_certs(
         };
 
         if let Some(checked) = index.lookup_fingerprint(&fpr).into_iter().next() {
-            let cert_algos = match checked.preferred_hash_algo(pgp::types::Timestamp::now()) {
-                Some(o) => o,
-                None => {
-                    errors.push(Box::new(NoHashAlgo {
-                        fpr: checked.fingerprint().clone(),
-                    }));
-                    continue;
-                }
-            };
-            let preferred_hash_algo = match rpgpie::policy::PREFERRED_HASH_ALGORITHMS
-                .iter()
-                .find(|algo| cert_algos.contains(algo))
-            {
-                Some(algo) => algo,
-                None => {
-                    errors.push(Box::new(NoHashAlgo {
-                        fpr: checked.fingerprint().clone(),
-                    }));
-                    continue;
-                }
-            };
+            let preferred_hash_algo =
+                select_signing_hash(checked.preferred_hash_algo(pgp::types::Timestamp::now()));
 
-            return Ok(Some((card, *preferred_hash_algo)));
+            return Ok(Some((card, preferred_hash_algo)));
         }
     }
 
@@ -131,16 +125,8 @@ pub fn sign(
             let cert = rpgpie::certificate::Certificate::from(tsk.clone());
             let checked = Checked::from(cert);
 
-            let Some(cert_algos) = checked.preferred_hash_algo(pgp::types::Timestamp::now()) else {
-                continue;
-            };
-            let hash_algo = match rpgpie::policy::PREFERRED_HASH_ALGORITHMS
-                .iter()
-                .find(|algo| cert_algos.contains(algo))
-            {
-                Some(algo) => *algo,
-                None => continue,
-            };
+            let hash_algo =
+                select_signing_hash(checked.preferred_hash_algo(pgp::types::Timestamp::now()));
 
             for data_signer in tsk.signing_capable_component_keys() {
                 let fp = data_signer.fingerprint();
@@ -357,4 +343,42 @@ pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), V
     }
 
     return Ok(());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_HASH_ALGORITHM, select_signing_hash};
+    use pgp::crypto::hash::HashAlgorithm;
+
+    #[test]
+    fn falls_back_to_default_when_no_preferences() {
+        // keyfork-generated certs declare no preferred-hash subpacket.
+        assert_eq!(select_signing_hash(None), DEFAULT_HASH_ALGORITHM);
+        // An empty preference list also falls back.
+        assert_eq!(select_signing_hash(Some(&[])), DEFAULT_HASH_ALGORITHM);
+    }
+
+    #[test]
+    fn falls_back_when_no_preference_is_accepted() {
+        // Cert only declares a hash we don't accept (SHA-1) -> default.
+        assert_eq!(
+            select_signing_hash(Some(&[HashAlgorithm::Sha1])),
+            DEFAULT_HASH_ALGORITHM
+        );
+    }
+
+    #[test]
+    fn uses_our_preference_order_among_accepted_hashes() {
+        // Single accepted preference is honored.
+        assert_eq!(
+            select_signing_hash(Some(&[HashAlgorithm::Sha256])),
+            HashAlgorithm::Sha256
+        );
+        // When the cert lists several, our order (SHA512 first) wins regardless
+        // of the cert's ordering.
+        assert_eq!(
+            select_signing_hash(Some(&[HashAlgorithm::Sha384, HashAlgorithm::Sha512])),
+            HashAlgorithm::Sha512
+        );
+    }
 }
