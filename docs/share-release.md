@@ -93,3 +93,9 @@ Explicit smartcard holder selection filters encryption fingerprints before PIN
 entry and both metadata/share decryption. An absent selected card fails without
 prompting another holder's card. Unit tests cover both enumeration orders; physical
 multi-card operation remains a hardware acceptance check.
+
+External-PGP smartcard and private-key signing use the certificate's accepted
+hash preferences when available, otherwise SHA-512. This permits signing with
+older certificates that omit hash preferences. To use this client-side fix,
+update Platform's pinned Locksmith revision and rebuild the CLI; existing bundles,
+the custody root and deployed services do not need replacement.
