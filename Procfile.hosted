@@ -1,0 +1,4 @@
+run: /keymaker-hosted
+app_sources: https://codeberg.org/caution/locksmith/archive/${COMMIT}.tar.gz
+ports: 8080
+http_port: 8080
