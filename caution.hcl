@@ -11,9 +11,14 @@ enclave "main" {
       port        = 8080
       ip_protocol = "tcp"
     }
+
+    http {
+      domain = "keymaker.caution.co"
+      port   = 8080
+    }
   }
 
   unit "default" {
-    command = "/keymaker"
+    command = "/keymaker-hosted"
   }
 }
