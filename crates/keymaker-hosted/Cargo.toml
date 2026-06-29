@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["macros"] }
-keymaker-core = { version = "0.1.0", path = "../keymaker-core" }
+keymaker-core = { version = "0.1.0", path = "../keymaker-core", features = ["axum"] }
 keymaker-models = { version = "0.1.0", path = "../keymaker-models" }
 serde = "1.0.228"
 serde_json = "1.0.149"

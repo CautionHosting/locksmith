@@ -11,3 +11,6 @@ pub use error::{GenerateQuorumError, GenerateQuorumErrorKind};
 pub use certs::{ParseCertificatesError, parse_certs};
 
 pub use quorum::{derive_openpgp_cert_from_entropy, generate_quorum, shard_entropy};
+
+#[cfg(feature = "axum")]
+pub mod http;

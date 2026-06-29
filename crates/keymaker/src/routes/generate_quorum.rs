@@ -1,33 +1,9 @@
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{Json, extract::State};
 use std::sync::Arc;
 
 use crate::AppState;
-use keymaker_core::{GenerateQuorumError, GenerateQuorumErrorKind};
+use keymaker_core::http::ApiError;
 use keymaker_models::generate_quorum::{GenerateQuorumRequest, GenerateQuorumResponse};
-
-/// Newtype wrapper so we can implement axum's `IntoResponse` for core's error type
-/// (orphan rule: the error now lives in `keymaker-core`).
-pub struct ApiError(GenerateQuorumError);
-
-impl From<GenerateQuorumError> for ApiError {
-    fn from(e: GenerateQuorumError) -> Self {
-        Self(e)
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> axum::response::Response {
-        let status_code = match self.0.kind() {
-            GenerateQuorumErrorKind::ParseCerts => StatusCode::BAD_REQUEST,
-            GenerateQuorumErrorKind::Entropy
-            | GenerateQuorumErrorKind::Shard
-            | GenerateQuorumErrorKind::DeriveOpenPGPCert
-            | GenerateQuorumErrorKind::SerializeOpenPGPCert => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        crate::middleware::error_handling::ErrorResponse::from_error(&self.0)
-            .into_response(status_code)
-    }
-}
 
 /// Generate a new quorum, then trigger the self-nuke reboot (see `selfnuke` feature).
 #[axum::debug_handler]

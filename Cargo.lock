@@ -2149,6 +2149,7 @@ name = "keymaker-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "dterror",
  "keyfork-derive-openpgp",
  "keyfork-derive-path-data",
@@ -2158,9 +2159,12 @@ dependencies = [
  "keyfork-shard",
  "keymaker-models",
  "sequoia-openpgp",
+ "serde",
+ "serde_json",
  "sha2",
  "structstruck",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 

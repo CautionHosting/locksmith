@@ -83,3 +83,26 @@ async fn concurrent_requests_return_independent_material() {
     keys.dedup();
     assert_eq!(keys.len(), 4);
 }
+
+#[tokio::test]
+async fn invalid_keyring_returns_400_with_errors_field() {
+    let base = spawn().await;
+    let req = serde_json::json!({
+        "label": HashMap::<String, String>::new(),
+        "threshold": 2u8,
+        "max": 3u8,
+        "keyring": "not a valid armored keyring",
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/generate_quorum"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["errors"].is_array() && !body["errors"].as_array().unwrap().is_empty(),
+        "expected non-empty errors array, got: {body}"
+    );
+}

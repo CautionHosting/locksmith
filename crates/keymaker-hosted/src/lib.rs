@@ -1,5 +1,4 @@
 //! Test surface for the keymaker-hosted server.
-pub mod middleware;
 pub mod routes;
 
 use axum::{Router, routing};
@@ -13,7 +12,7 @@ pub fn app() -> Router {
         .route("/health", routing::get(routes::health))
         .route("/generate_quorum", routing::post(routes::generate_quorum))
         .layer(axum::middleware::from_fn(
-            middleware::error_handling::error_logger_middleware,
+            keymaker_core::http::error_logger_middleware,
         ))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(tower_http::trace::TraceLayer::new_for_http())

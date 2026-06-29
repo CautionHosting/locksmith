@@ -4,7 +4,6 @@ use tokio::sync::Semaphore;
 use tracing::{error, info};
 use std::sync::Arc;
 
-mod middleware;
 mod routes;
 
 #[global_allocator]
@@ -47,7 +46,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
             routing::post(routes::generate_quorum::generate_quorum),
         )
         .layer(axum::middleware::from_fn(
-            middleware::error_handling::error_logger_middleware,
+            keymaker_core::http::error_logger_middleware,
         ))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(Arc::new(AppState::new()));
