@@ -86,6 +86,8 @@ async fn concurrent_requests_return_independent_material() {
 
 #[tokio::test]
 async fn invalid_keyring_returns_400_with_errors_field() {
+    // ensure_safe() fires before parse_certs; set the bypass so this test reaches cert parsing.
+    unsafe { std::env::set_var("SHOOT_SELF_IN_FOOT", "1") };
     let base = spawn().await;
     let req = serde_json::json!({
         "label": HashMap::<String, String>::new(),
