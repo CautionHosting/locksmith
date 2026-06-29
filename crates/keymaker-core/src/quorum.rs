@@ -173,8 +173,14 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(not(target_os = "linux"), ignore = "ensure_safe() requires /proc/version (Linux/enclave only)")]
     fn generate_quorum_returns_a_valid_bundle() {
+        // `keyfork_entropy::ensure_safe()` is an airgap guard: it aborts unless every non-`lo`
+        // network interface is down (only true inside a real Nitro enclave, which is vsock-only)
+        // or one of keyfork's documented bypass vars is set. Set the bypass so this test can
+        // exercise the full `generate_quorum` path on an ordinary networked CI/dev host. Setting
+        // it process-wide is safe here: it only *relaxes* the guard, and no test asserts the guard
+        // is active.
+        unsafe { std::env::set_var("SHOOT_SELF_IN_FOOT", "1") };
 
         use sequoia_openpgp::cert::Cert;
         use sequoia_openpgp::parse::Parse;

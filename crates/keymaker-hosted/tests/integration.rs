@@ -41,8 +41,12 @@ async fn health_is_ok() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(target_os = "linux"), ignore = "ensure_safe() requires /proc/version (Linux/enclave only)")]
 async fn concurrent_requests_return_independent_material() {
+    // `/generate_quorum` calls `keyfork_entropy::ensure_safe()`, an airgap guard that aborts unless
+    // every non-`lo` interface is down (true only inside a real Nitro enclave) or a documented
+    // bypass var is set. Set the bypass so this test runs on an ordinary networked CI/dev host.
+    unsafe { std::env::set_var("SHOOT_SELF_IN_FOOT", "1") };
+
     let base = spawn().await;
     let keyring = test_keyring();
 
