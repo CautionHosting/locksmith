@@ -3,13 +3,21 @@ name = "keymaker-hosted"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "keymaker_hosted"
+path = "src/lib.rs"
+
+[[bin]]
+name = "keymaker-hosted"
+path = "src/main.rs"
+
 [dependencies]
 axum = { version = "0.8.8", features = ["macros"] }
 keymaker-core = { version = "0.1.0", path = "../keymaker-core" }
 keymaker-models = { version = "0.1.0", path = "../keymaker-models" }
 serde = "1.0.228"
 serde_json = "1.0.149"
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "net"] }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "net", "macros"] }
 tower-http = { version = "0.6.8", features = ["trace", "limit"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
@@ -17,3 +25,4 @@ zalloc = "0.1.0"
 
 [dev-dependencies]
 reqwest = { version = "0.13.2", features = ["json"] }
+sequoia-openpgp = "1"

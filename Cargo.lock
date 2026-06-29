@@ -2118,19 +2118,12 @@ dependencies = [
  "anyhow",
  "axum",
  "dterror",
- "keyfork-derive-openpgp",
- "keyfork-derive-path-data",
- "keyfork-entropy",
- "keyfork-mnemonic",
- "keyfork-shard",
+ "keymaker-core",
  "keymaker-models",
  "nix 0.31.2",
  "reqwest",
- "sequoia-openpgp",
  "serde",
  "serde_json",
- "sha2",
- "structstruck",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
@@ -2149,6 +2142,44 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "keymaker-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dterror",
+ "keyfork-derive-openpgp",
+ "keyfork-derive-path-data",
+ "keyfork-entropy",
+ "keyfork-mnemonic",
+ "keyfork-prompt",
+ "keyfork-shard",
+ "keymaker-models",
+ "sequoia-openpgp",
+ "sha2",
+ "structstruck",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "keymaker-hosted"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "keymaker-core",
+ "keymaker-models",
+ "reqwest",
+ "sequoia-openpgp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "zalloc",
 ]
 
 [[package]]
@@ -4262,6 +4293,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body",
+ "http-body-util",
  "pin-project-lite",
  "tower",
  "tower-layer",
