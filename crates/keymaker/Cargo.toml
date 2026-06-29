@@ -12,6 +12,7 @@ keyfork-derive-path-data = { version = "0.1.3", registry = "distrust" }
 keyfork-entropy = { version = "0.1.2", registry = "distrust", default-features = false }
 keyfork-mnemonic = { version = "0.4.1", registry = "distrust", default-features = false }
 keyfork-shard = { version = "0.4.0", registry = "distrust", default-features = false, features = ["openpgp", "openpgp-card"] }
+keymaker-core = { version = "0.1.0", path = "../keymaker-core" }
 keymaker-models = { version = "0.1.0", path = "../keymaker-models" }
 sequoia-openpgp = "1"
 serde = "1.0.228"
