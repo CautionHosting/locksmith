@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
 	"crates/keymaker-models",
+	"crates/keymaker-core",
 	"crates/keymaker",
 	"crates/keymaker-client",
 	"crates/locksmith",
