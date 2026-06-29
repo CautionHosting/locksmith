@@ -6,8 +6,7 @@ mod certs;
 mod error;
 mod quorum;
 
-// TODO: Uncomment after Task 2 (error.rs) is completed
-// pub use error::{GenerateQuorumError, GenerateQuorumErrorKind};
+pub use error::{GenerateQuorumError, GenerateQuorumErrorKind};
 
 // TODO: Uncomment after Task 3 (certs.rs) is completed
 // pub use certs::{ParseCertificatesError, parse_certs};
