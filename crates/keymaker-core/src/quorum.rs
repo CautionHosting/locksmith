@@ -173,11 +173,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "ensure_safe() requires /proc/version (Linux/enclave only)")]
     fn generate_quorum_returns_a_valid_bundle() {
-        // keyfork_entropy::ensure_safe() checks /proc/version (Linux-only).
-        // Set the escape-hatch env var so the test runs on macOS too.
-        // SAFETY: single-threaded test, no concurrent env reads.
-        unsafe { std::env::set_var("SHOOT_SELF_IN_FOOT", "1") };
 
         use sequoia_openpgp::cert::Cert;
         use sequoia_openpgp::parse::Parse;
