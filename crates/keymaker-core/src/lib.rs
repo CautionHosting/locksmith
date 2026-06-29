@@ -10,5 +10,4 @@ pub use error::{GenerateQuorumError, GenerateQuorumErrorKind};
 
 pub use certs::{ParseCertificatesError, parse_certs};
 
-// TODO: Uncomment after Task 4 (quorum.rs) is completed
-// pub use quorum::{derive_openpgp_cert_from_entropy, generate_quorum, shard_entropy};
+pub use quorum::{derive_openpgp_cert_from_entropy, generate_quorum, shard_entropy};
