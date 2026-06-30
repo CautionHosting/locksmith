@@ -13,7 +13,7 @@ enclave "main" {
     }
 
     http {
-      domain = "keymaker.caution.co"
+      domain = "keymaker.kobl.one"
       port   = 8080
     }
   }
