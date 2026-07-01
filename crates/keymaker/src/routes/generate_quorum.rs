@@ -12,10 +12,10 @@ pub async fn generate_quorum(
     State(app_state): State<Arc<AppState>>,
     Json(request): Json<GenerateQuorumRequest>,
 ) -> Result<Json<GenerateQuorumResponse>, ApiError> {
-    #[cfg(not(feature = "selfnuke"))]
+    #[cfg(not(all(feature = "selfnuke", target_os = "linux")))]
     let _ = &app_state;
 
-    #[cfg(feature = "selfnuke")]
+    #[cfg(all(feature = "selfnuke", target_os = "linux"))]
     tokio::task::spawn({
         // NOTE: The system should be terminated after this route has been called, regardless of
         // whether it was successful or not. We set a deadline of 10 seconds to complete the

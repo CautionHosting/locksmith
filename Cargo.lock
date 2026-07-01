@@ -2122,6 +2122,7 @@ dependencies = [
  "keymaker-models",
  "nix 0.31.2",
  "reqwest",
+ "sequoia-openpgp",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
