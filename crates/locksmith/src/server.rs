@@ -7,7 +7,7 @@ use blahaj::{Share, Sharks};
 use bootproof::format::{Format, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
-use keymaker_models::generate_quorum::GenerateQuorumResponse;
+use keymaker_models::generate_quorum::v0::GenerateQuorumResponse;
 use sha2::Sha256;
 use std::fmt::Write;
 use std::panic::Location;

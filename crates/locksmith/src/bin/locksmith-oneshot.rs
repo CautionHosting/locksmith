@@ -109,8 +109,6 @@ fn decrypt_secrets(
     paths: &[PathBuf],
 ) -> Result<HashMap<OsString, String>, Vec<Box<dyn std::error::Error>>> {
     let mut errors = vec![];
-    let secrets: HashMap<OsString, String> = HashMap::new();
-
     let mut secrets = HashMap::new();
     for path in paths {
         let secret_name = path
@@ -130,10 +128,10 @@ fn decrypt_secrets(
         secrets.insert(secret_name, secret);
     }
 
-    if !errors.is_empty() {
-        Err(errors)
-    } else {
+    if errors.is_empty() {
         Ok(secrets)
+    } else {
+        Err(errors)
     }
 }
 

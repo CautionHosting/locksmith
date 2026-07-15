@@ -67,7 +67,7 @@ impl FromContexts for SendShardError {
 pub async fn send_shard(
     address: std::net::SocketAddr,
     pcrs: std::collections::HashMap<u8, Vec<u8>>,
-    bundle: &keymaker_models::generate_quorum::GenerateQuorumResponse,
+    bundle: &keymaker_models::generate_quorum::v0::GenerateQuorumResponse,
     opt_private_key_path: Option<std::path::PathBuf>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
     use SendShardErrorKind as ErrorKind;

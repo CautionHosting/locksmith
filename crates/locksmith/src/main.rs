@@ -1,4 +1,4 @@
-use keymaker_models::generate_quorum::GenerateQuorumResponse;
+use keymaker_models::generate_quorum::v0::GenerateQuorumResponse;
 
 #[tokio::main]
 async fn main() {

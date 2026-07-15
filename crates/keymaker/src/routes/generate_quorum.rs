@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::AppState;
-use keymaker_models::generate_quorum::{GenerateQuorumRequest, GenerateQuorumResponse};
+use keymaker_models::generate_quorum::v0::{GenerateQuorumRequest, GenerateQuorumResponse};
 
 fn hash_keyring(keyring: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
