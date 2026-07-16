@@ -6,3 +6,6 @@ members = [
 	"crates/keymaker-client",
 	"crates/locksmith",
 ]
+
+[workspace.package]
+license = "AGPL-3.0-only OR LicenseRef-Caution-Commercial"
