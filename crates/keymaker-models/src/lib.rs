@@ -88,7 +88,7 @@ pub mod generate_quorum {
         #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
         pub struct GenerateQuorumRequest {
             /// A randomly-generated bundle UUID.
-            pub bundle_id: [u8; 32],
+            pub bundle_id: [u8; 16],
 
             /// Any user-readable labels associated with the bundle.
             pub label: HashMap<String, String>,
@@ -106,7 +106,7 @@ pub mod generate_quorum {
         #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
         pub struct GenerateQuorumResponse {
             /// The provided bundle UUID.
-            pub bundle_id: [u8; 32],
+            pub bundle_id: [u8; 16],
 
             /// The provided labels.
             pub label: HashMap<String, String>,
