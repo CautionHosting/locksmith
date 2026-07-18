@@ -5,6 +5,7 @@ members = [
 	"crates/keymaker",
 	"crates/keymaker-client",
 	"crates/locksmith",
+	"crates/public-certificate-models",
 ]
 
 [workspace.package]
