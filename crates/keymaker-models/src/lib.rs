@@ -31,6 +31,7 @@ pub mod generate_quorum {
     }
 
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(tag = "version")]
     pub enum GenerateQuorumRequest {
         V1(v1::GenerateQuorumRequest),
     }
@@ -45,6 +46,7 @@ pub mod generate_quorum {
     }
 
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(tag = "version")]
     pub enum GenerateQuorumResponse {
         V1(v1::GenerateQuorumResponse),
     }
