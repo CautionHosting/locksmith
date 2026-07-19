@@ -47,6 +47,8 @@ impl PublicCertificateBundle {
 pub type PublicCertificateResponse = Proofed<PublicCertificateBundle>;
 
 pub mod v1 {
+    use std::num::NonZeroU8;
+
     /// Request to derive a bundle of public OpenPGP certificates.
     #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -54,11 +56,8 @@ pub mod v1 {
         /// Organization UUID, encoded as its canonical 16-byte representation.
         pub organization_id: [u8; 16],
 
-        /// Per-request bundle UUID, encoded as its canonical 16-byte representation.
-        pub bundle_id: [u8; 16],
-
-        /// Number of certificates requested in the bundle.
-        pub certificate_count: u8,
+        /// Non-zero number of certificates requested in the bundle.
+        pub certificate_count: NonZeroU8,
     }
 
     /// Public certificate bundle covered by a necroproof.
