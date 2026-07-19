@@ -1,5 +1,3 @@
-use keymaker_models::generate_quorum::v0::GenerateQuorumResponse;
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -9,7 +7,8 @@ async fn main() {
     let bundlefile = args.next().unwrap_or_else(|| "bundle.json".into());
 
     let bundle_text = std::fs::read_to_string(bundlefile).expect("has bundle");
-    let bundle: GenerateQuorumResponse = serde_json::from_str(&bundle_text).expect("valid json");
+    let bundle =
+        locksmith::bundle::QuorumBundle::load_json(&bundle_text).expect("valid bundle json");
     let status = locksmith::client::send_shard(
         address.parse().expect("should pass IP:port, probably port 49504"),
         std::collections::HashMap::from_iter([

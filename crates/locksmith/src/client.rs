@@ -67,7 +67,7 @@ impl FromContexts for SendShardError {
 pub async fn send_shard(
     address: std::net::SocketAddr,
     pcrs: std::collections::HashMap<u8, Vec<u8>>,
-    bundle: &keymaker_models::generate_quorum::v0::GenerateQuorumResponse,
+    bundle: &crate::bundle::QuorumBundle,
     opt_private_key_path: Option<std::path::PathBuf>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
     use SendShardErrorKind as ErrorKind;
@@ -136,6 +136,7 @@ pub async fn send_shard(
     let temp_ph = std::rc::Rc::new(std::sync::Mutex::new(
         keyfork_prompt::default_handler().expect("please give us a handler"),
     ));
+    let openpgp_keyring = bundle.openpgp_keyring();
     let messages = OpenPGP
         .parse_shard_file(bundle.shardfile.as_bytes())
         .with_contexts((), ErrorKind::ParseShardfile)?;
@@ -174,7 +175,7 @@ pub async fn send_shard(
 
     // sign the request
     let signature = crate::openpgp::sign(
-        &bundle.keyring,
+        &openpgp_keyring,
         &send_encrypted_shard_request,
         &mut **temp_ph.lock().expect("unpoisoned mutex"),
         opt_private_key_path.as_deref(),

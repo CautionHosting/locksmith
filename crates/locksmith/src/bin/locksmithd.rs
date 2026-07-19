@@ -1,10 +1,9 @@
-use keymaker_models::generate_quorum::v0::GenerateQuorumResponse;
 use keyfork_mnemonic::Mnemonic;
 
 #[tokio::main]
 async fn get_shards() -> Vec<u8> {
     let bundle_text = std::fs::read_to_string("/etc/caution/bundle.json").expect("has bundle");
-    let bundle: GenerateQuorumResponse = serde_json::from_str(&bundle_text).expect("valid json");
+    let bundle = locksmith::bundle::QuorumBundle::load_json(&bundle_text).expect("valid bundle json");
 
     let reconstituted_secret = locksmith::server::receive_shards(
         "0.0.0.0:49504".parse().expect("known address can be parsed"),
