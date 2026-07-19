@@ -1,4 +1,3 @@
-use crate::bundle::QuorumBundle;
 use crate::models;
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
@@ -109,7 +108,7 @@ impl RequestStub {
 #[tracing::instrument(skip_all)]
 async fn server(
     address: std::net::SocketAddr,
-    bundle: QuorumBundle,
+    bundle: keymaker_models::generate_quorum::GenerateQuorumResponse,
     tx: tokio::sync::mpsc::Sender<Payload>,
     broadcast_tx: tokio::sync::broadcast::Sender<ReconstitutionStatus>,
 ) -> Result<(), ReceiveShardsError> {
@@ -159,7 +158,7 @@ async fn server(
 #[tracing::instrument(skip_all, fields(%request_stub))]
 async fn handle_client(
     mut client: tokio::net::TcpStream,
-    bundle: QuorumBundle,
+    bundle: keymaker_models::generate_quorum::GenerateQuorumResponse,
     tx: tokio::sync::mpsc::Sender<Payload>,
     mut broadcast_rx: tokio::sync::broadcast::Receiver<ReconstitutionStatus>,
     request_stub: RequestStub,
@@ -191,7 +190,7 @@ async fn handle_client(
     .with_contexts((), ErrorKind::ReceiveRequest)?;
 
     debug!("verifying signed request from user");
-    let openpgp_keyring = bundle.openpgp_keyring();
+    let openpgp_keyring = crate::bundle::openpgp_keyring(&bundle);
     let signed_request = match crate::openpgp::verify_detached(
         &openpgp_keyring,
         &request.signed_payload,
@@ -362,7 +361,7 @@ async fn reconstitute_shards(
 #[tracing::instrument(skip_all)]
 pub async fn receive_shards(
     address: std::net::SocketAddr,
-    bundle: &QuorumBundle,
+    bundle: &keymaker_models::generate_quorum::GenerateQuorumResponse,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
     // Payloads are: shard || threshold
     let (tx, rx) = tokio::sync::mpsc::channel::<Payload>(255);
