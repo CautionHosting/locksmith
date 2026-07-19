@@ -1,10 +1,12 @@
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Proofed<T> {
-    data: T,
-    necroproof: Vec<u8>,
+    pub data: T,
+    pub necroproof: Vec<u8>,
 }
 
 pub mod generate_quorum {
+    use sha2::{Digest as _, Sha256};
     use std::collections::HashMap;
 
     pub mod v0 {
@@ -45,19 +47,49 @@ pub mod generate_quorum {
         }
     }
 
-    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    pub type GenerateQuorumResponse = crate::Proofed<GenerateQuorumBundle>;
+
+    #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
     #[serde(tag = "version")]
-    pub enum GenerateQuorumResponse {
+    pub enum GenerateQuorumBundle {
         V1(v1::GenerateQuorumResponse),
     }
 
-    impl GenerateQuorumResponse {
+    impl GenerateQuorumBundle {
         #[must_use]
         pub fn to_latest(self) -> v1::GenerateQuorumResponse {
             match self {
-                GenerateQuorumResponse::V1(generate_quorum_response) => generate_quorum_response,
+                GenerateQuorumBundle::V1(generate_quorum_response) => generate_quorum_response,
             }
         }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("failed to hash generate quorum bundle")]
+    pub struct DeterministicBundleHashError {
+        #[source]
+        source: serde_cbor::Error,
+    }
+
+    pub fn deterministic_bundle_hash(
+        bundle: &GenerateQuorumBundle,
+    ) -> Result<Vec<u8>, DeterministicBundleHashError> {
+        let encoded =
+            serde_cbor::to_vec(bundle).map_err(|source| DeterministicBundleHashError { source })?;
+        let mut hash = Sha256::new();
+        hash.update(encoded);
+        Ok(hash.finalize().to_vec())
+    }
+
+    pub fn deterministic_necroproof_nonce(
+        bundle_hash: &[u8],
+    ) -> Result<Vec<u8>, DeterministicBundleHashError> {
+        let encoded =
+            serde_cbor::to_vec(&("keymaker-generate-quorum-necroproof-nonce-v1", bundle_hash))
+                .map_err(|source| DeterministicBundleHashError { source })?;
+        let mut hash = Sha256::new();
+        hash.update(encoded);
+        Ok(hash.finalize().to_vec())
     }
 
     pub mod v1 {
@@ -66,7 +98,7 @@ pub mod generate_quorum {
         /// A key used either for directly decrypting the shard, or authorizing a third party to
         /// decrypt the shard. Every key must containing a signing component and an encryption
         /// component.
-        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
         pub enum Key {
             /// An OpenPGP certificate used for decrypting the shard and signing the encrypted
             /// payload.
@@ -88,6 +120,7 @@ pub mod generate_quorum {
         }
 
         #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
         pub struct GenerateQuorumRequest {
             /// A randomly-generated bundle UUID.
             pub bundle_id: [u8; 16],
@@ -105,7 +138,8 @@ pub mod generate_quorum {
             pub keyring: Vec<Key>,
         }
 
-        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
         pub struct GenerateQuorumResponse {
             /// The provided bundle UUID.
             pub bundle_id: [u8; 16],
@@ -122,5 +156,90 @@ pub mod generate_quorum {
             /// The default OpenPGP Certificate of the generated quorum.
             pub public_key: String,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Proofed;
+    use super::generate_quorum::{
+        GenerateQuorumBundle, GenerateQuorumResponse, deterministic_bundle_hash, v1,
+    };
+    use std::collections::HashMap;
+
+    fn sample_bundle(label: &str) -> GenerateQuorumBundle {
+        GenerateQuorumBundle::V1(v1::GenerateQuorumResponse {
+            bundle_id: [7; 16],
+            label: HashMap::from_iter([("name".to_string(), label.to_string())]),
+            keyring: vec![v1::Key::OpenPGP {
+                cert: "-----BEGIN PGP PUBLIC KEY BLOCK-----\n-----END PGP PUBLIC KEY BLOCK-----"
+                    .to_string(),
+            }],
+            shardfile: "-----BEGIN PGP MESSAGE-----\n-----END PGP MESSAGE-----".to_string(),
+            public_key: "-----BEGIN PGP PUBLIC KEY BLOCK-----\n-----END PGP PUBLIC KEY BLOCK-----"
+                .to_string(),
+        })
+    }
+
+    #[test]
+    fn proofed_generate_quorum_response_deserializes_tagged_v1_data() {
+        let json = r#"
+        {
+          "data": {
+            "version": "V1",
+            "bundle_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            "label": {"name": "demo"},
+            "keyring": [{"OpenPGP": {"cert": "cert"}}],
+            "shardfile": "shards",
+            "public_key": "public"
+          },
+          "necroproof": [2, 3, 5]
+        }
+        "#;
+
+        let response: GenerateQuorumResponse = serde_json::from_str(json).expect("valid v1 bundle");
+
+        assert_eq!(response.necroproof, vec![2, 3, 5]);
+        assert!(matches!(response.data, GenerateQuorumBundle::V1(_)));
+    }
+
+    #[test]
+    fn legacy_v0_response_is_not_a_versioned_proofed_bundle() {
+        let legacy = r#"
+        {
+          "label": {},
+          "keyring": "cert",
+          "keyring_hash": [1, 2, 3],
+          "shardfile": "shards",
+          "public_key": "public",
+          "necroproof": []
+        }
+        "#;
+
+        assert!(serde_json::from_str::<GenerateQuorumResponse>(legacy).is_err());
+    }
+
+    #[test]
+    fn deterministic_bundle_hash_covers_data_but_not_necroproof() {
+        let data = sample_bundle("demo");
+        let first = Proofed {
+            data: data.clone(),
+            necroproof: vec![1],
+        };
+        let second = Proofed {
+            data: data.clone(),
+            necroproof: vec![2],
+        };
+
+        assert_eq!(
+            deterministic_bundle_hash(&first.data).expect("hash first"),
+            deterministic_bundle_hash(&second.data).expect("hash second")
+        );
+
+        let different_data = sample_bundle("other");
+        assert_ne!(
+            deterministic_bundle_hash(&data).expect("hash original"),
+            deterministic_bundle_hash(&different_data).expect("hash changed")
+        );
     }
 }

@@ -1,4 +1,5 @@
 use axum::{Json, extract::State, http::StatusCode};
+use bootproof::format::{Format as _, nitro::Nitro};
 use dterror::*;
 use keyfork_derive_openpgp::derive_util as derive;
 use keyfork_shard::{
@@ -17,16 +18,13 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::AppState;
-use keymaker_models::generate_quorum::v0::{GenerateQuorumRequest, GenerateQuorumResponse};
-
-fn hash_keyring(keyring: &[u8]) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
-
-    let mut hash = Sha256::new();
-    hash.update(keyring);
-
-    hash.finalize().to_vec()
-}
+use keymaker_models::{
+    Proofed,
+    generate_quorum::{
+        GenerateQuorumBundle, GenerateQuorumRequest, GenerateQuorumResponse,
+        deterministic_bundle_hash, deterministic_necroproof_nonce, v1,
+    },
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error("could not parse valid certificates [{location}]")]
@@ -84,6 +82,9 @@ structstruck::strike! {
             Shard,
             DeriveOpenPGPCert,
             SerializeOpenPGPCert,
+            HashBundle,
+            DeriveNecroproofNonce,
+            GenerateNecroproof,
         },
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
         location: &'static Location<'static>,
@@ -114,7 +115,10 @@ impl axum::response::IntoResponse for GenerateQuorumError {
             GenerateQuorumErrorKind::Entropy
             | GenerateQuorumErrorKind::Shard
             | GenerateQuorumErrorKind::DeriveOpenPGPCert
-            | GenerateQuorumErrorKind::SerializeOpenPGPCert => StatusCode::INTERNAL_SERVER_ERROR,
+            | GenerateQuorumErrorKind::SerializeOpenPGPCert
+            | GenerateQuorumErrorKind::HashBundle
+            | GenerateQuorumErrorKind::DeriveNecroproofNonce
+            | GenerateQuorumErrorKind::GenerateNecroproof => StatusCode::INTERNAL_SERVER_ERROR,
             GenerateQuorumErrorKind::ParseCerts => StatusCode::BAD_REQUEST,
         };
 
@@ -133,12 +137,7 @@ impl axum::response::IntoResponse for GenerateQuorumError {
 #[tracing::instrument(skip_all)]
 pub async fn generate_quorum(
     State(app_state): State<Arc<AppState>>,
-    Json(GenerateQuorumRequest {
-        label,
-        threshold,
-        max,
-        keyring,
-    }): Json<GenerateQuorumRequest>,
+    Json(request): Json<GenerateQuorumRequest>,
 ) -> Result<Json<GenerateQuorumResponse>, GenerateQuorumError> {
     #[cfg(feature = "selfnuke")]
     tokio::task::spawn({
@@ -160,12 +159,25 @@ pub async fn generate_quorum(
     });
 
     use GenerateQuorumErrorKind as ErrorKind;
-    let keyring_hash = hash_keyring(keyring.as_bytes());
+    let v1::GenerateQuorumRequest {
+        bundle_id,
+        label,
+        threshold,
+        max,
+        keyring,
+    } = request.to_latest();
+    let keyring_certs = keyring
+        .iter()
+        .map(|key| match key {
+            v1::Key::OpenPGP { cert } | v1::Key::WebAuthn { cert, .. } => cert.as_str(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    debug!(?label, ?threshold, ?max, ?keyring_hash);
+    debug!(?label, ?threshold, ?max);
     keyfork_entropy::ensure_safe();
 
-    let certs = parse_certs(&keyring).with_contexts((), GenerateQuorumErrorKind::ParseCerts)?;
+    let certs = parse_certs(&keyring_certs).with_contexts((), GenerateQuorumErrorKind::ParseCerts)?;
 
     let opgp = OpenPGP;
     let entropy: [u8; 32] =
@@ -232,12 +244,23 @@ pub async fn generate_quorum(
     let public_key = String::try_from(secret_recipient_public_key_bytes)
         .expect("should always get valid utf8 from armor");
 
-    Ok(Json(GenerateQuorumResponse {
+    let data = GenerateQuorumBundle::V1(v1::GenerateQuorumResponse {
+        bundle_id,
         label,
         keyring,
-        keyring_hash,
         shardfile,
         public_key,
-        necroproof: vec![],
-    }))
+    });
+    let bundle_hash = deterministic_bundle_hash(&data).with_contexts((), ErrorKind::HashBundle)?;
+    let nonce = deterministic_necroproof_nonce(&bundle_hash)
+        .with_contexts((), ErrorKind::DeriveNecroproofNonce)?;
+    let necroproof = Nitro
+        .generate(Some(&bundle_hash), Some(&nonce))
+        .map_err(|source| GenerateQuorumError {
+            kind: ErrorKind::GenerateNecroproof,
+            source: Some(source),
+            location: Location::caller(),
+        })?;
+
+    Ok(Json(Proofed { data, necroproof }))
 }

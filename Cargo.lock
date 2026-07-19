@@ -2117,6 +2117,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bootproof",
  "dterror",
  "keyfork-derive-openpgp",
  "keyfork-derive-path-data",
@@ -2156,7 +2157,10 @@ name = "keymaker-models"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_cbor",
+ "serde_json",
  "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

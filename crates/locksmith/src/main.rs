@@ -1,5 +1,3 @@
-use keymaker_models::generate_quorum::v0::GenerateQuorumResponse;
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -7,9 +5,17 @@ async fn main() {
     let mut args = std::env::args().skip(1);
     let address = args.next().expect("pass in socket address please");
     let bundlefile = args.next().unwrap_or_else(|| "bundle.json".into());
+    let policyfile = args
+        .next()
+        .or_else(|| std::env::var("KEYMAKER_PCR_POLICY_JSON").ok())
+        .expect("pass Keymaker PCR policy JSON path or set KEYMAKER_PCR_POLICY_JSON");
 
+    let policy_text = std::fs::read_to_string(policyfile).expect("has Keymaker PCR policy");
+    let policy = locksmith::bundle::KeymakerPcrPolicy::from_json(&policy_text)
+        .expect("valid Keymaker PCR policy JSON");
     let bundle_text = std::fs::read_to_string(bundlefile).expect("has bundle");
-    let bundle: GenerateQuorumResponse = serde_json::from_str(&bundle_text).expect("valid json");
+    let bundle = locksmith::bundle::load_json(&bundle_text, &policy, std::time::SystemTime::now())
+        .expect("valid verified bundle json");
     let status = locksmith::client::send_shard(
         address.parse().expect("should pass IP:port, probably port 49504"),
         std::collections::HashMap::from_iter([

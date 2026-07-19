@@ -1,6 +1,7 @@
 pub mod models;
 mod openpgp;
 
+pub mod bundle;
 pub mod client;
 pub mod server;
 

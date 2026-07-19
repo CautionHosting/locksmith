@@ -1,4 +1,4 @@
-use crate::models;
+use crate::{bundle::QuorumBundle, models};
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, consts::U12},
@@ -39,6 +39,7 @@ strike! {
             RecryptShard,
             HexEncodeRecryptedShard,
             SignHexEncodedRecryptedShard,
+            BundleAccess,
         },
         location: &'static Location<'static>,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -67,7 +68,7 @@ impl FromContexts for SendShardError {
 pub async fn send_shard(
     address: std::net::SocketAddr,
     pcrs: std::collections::HashMap<u8, Vec<u8>>,
-    bundle: &keymaker_models::generate_quorum::v0::GenerateQuorumResponse,
+    bundle: &QuorumBundle,
     opt_private_key_path: Option<std::path::PathBuf>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
     use SendShardErrorKind as ErrorKind;
@@ -136,8 +137,13 @@ pub async fn send_shard(
     let temp_ph = std::rc::Rc::new(std::sync::Mutex::new(
         keyfork_prompt::default_handler().expect("please give us a handler"),
     ));
+    let keyring = bundle.openpgp_keyring().map_err(|source| SendShardError {
+        kind: ErrorKind::BundleAccess,
+        location: Location::caller(),
+        source: Box::new(source),
+    })?;
     let messages = OpenPGP
-        .parse_shard_file(bundle.shardfile.as_bytes())
+        .parse_shard_file(bundle.shardfile().as_bytes())
         .with_contexts((), ErrorKind::ParseShardfile)?;
     // NOTE: This code is very error prone and only incidentally works.
     // It is not dyn compatible.
@@ -174,7 +180,7 @@ pub async fn send_shard(
 
     // sign the request
     let signature = crate::openpgp::sign(
-        &bundle.keyring,
+        &keyring,
         &send_encrypted_shard_request,
         &mut **temp_ph.lock().expect("unpoisoned mutex"),
         opt_private_key_path.as_deref(),
