@@ -2284,6 +2284,7 @@ dependencies = [
  "card-backend",
  "card-backend-pcsc",
  "cfg-if",
+ "coset",
  "daemonize",
  "dterror",
  "ed25519-dalek",

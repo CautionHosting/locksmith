@@ -7,7 +7,7 @@ async fn get_shards() -> Vec<u8> {
     let policy = locksmith::bundle::KeymakerPcrPolicy::from_json(&policy_text)
         .expect("valid Keymaker PCR policy JSON");
     let bundle_text = std::fs::read_to_string("/etc/caution/bundle.json").expect("has bundle");
-    let bundle = locksmith::bundle::load_json(&bundle_text, &policy, std::time::SystemTime::now())
+    let bundle = locksmith::bundle::load_json(&bundle_text, &policy)
         .expect("valid verified bundle json");
 
     let reconstituted_secret = locksmith::server::receive_shards(

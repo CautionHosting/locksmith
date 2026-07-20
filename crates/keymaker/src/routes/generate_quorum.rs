@@ -177,7 +177,8 @@ pub async fn generate_quorum(
     debug!(?label, ?threshold, ?max);
     keyfork_entropy::ensure_safe();
 
-    let certs = parse_certs(&keyring_certs).with_contexts((), GenerateQuorumErrorKind::ParseCerts)?;
+    let certs =
+        parse_certs(&keyring_certs).with_contexts((), GenerateQuorumErrorKind::ParseCerts)?;
 
     let opgp = OpenPGP;
     let entropy: [u8; 32] =

@@ -74,8 +74,10 @@ pub mod generate_quorum {
     pub fn deterministic_bundle_hash(
         bundle: &GenerateQuorumBundle,
     ) -> Result<Vec<u8>, DeterministicBundleHashError> {
-        let encoded =
-            serde_cbor::to_vec(bundle).map_err(|source| DeterministicBundleHashError { source })?;
+        let canonical_value = serde_cbor::value::to_value(bundle)
+            .map_err(|source| DeterministicBundleHashError { source })?;
+        let encoded = serde_cbor::to_vec(&canonical_value)
+            .map_err(|source| DeterministicBundleHashError { source })?;
         let mut hash = Sha256::new();
         hash.update(encoded);
         Ok(hash.finalize().to_vec())
@@ -167,10 +169,10 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    fn sample_bundle(label: &str) -> GenerateQuorumBundle {
+    fn sample_bundle(label: impl Into<HashMap<String, String>>) -> GenerateQuorumBundle {
         GenerateQuorumBundle::V1(v1::GenerateQuorumResponse {
             bundle_id: [7; 16],
-            label: HashMap::from_iter([("name".to_string(), label.to_string())]),
+            label: label.into(),
             keyring: vec![v1::Key::OpenPGP {
                 cert: "-----BEGIN PGP PUBLIC KEY BLOCK-----\n-----END PGP PUBLIC KEY BLOCK-----"
                     .to_string(),
@@ -220,8 +222,38 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_bundle_hash_is_stable_across_label_order_and_json_roundtrip() {
+        let first = sample_bundle(HashMap::from_iter([
+            ("name".to_string(), "demo".to_string()),
+            ("environment".to_string(), "test".to_string()),
+            ("owner".to_string(), "caution".to_string()),
+        ]));
+        let second = sample_bundle(HashMap::from_iter([
+            ("owner".to_string(), "caution".to_string()),
+            ("environment".to_string(), "test".to_string()),
+            ("name".to_string(), "demo".to_string()),
+        ]));
+        let roundtripped: GenerateQuorumBundle =
+            serde_json::from_str(&serde_json::to_string(&first).expect("serialize bundle"))
+                .expect("deserialize bundle");
+
+        let first_hash = deterministic_bundle_hash(&first).expect("hash first");
+        assert_eq!(
+            first_hash,
+            deterministic_bundle_hash(&second).expect("hash second")
+        );
+        assert_eq!(
+            first_hash,
+            deterministic_bundle_hash(&roundtripped).expect("hash roundtripped")
+        );
+    }
+
+    #[test]
     fn deterministic_bundle_hash_covers_data_but_not_necroproof() {
-        let data = sample_bundle("demo");
+        let data = sample_bundle(HashMap::from_iter([(
+            "name".to_string(),
+            "demo".to_string(),
+        )]));
         let first = Proofed {
             data: data.clone(),
             necroproof: vec![1],
@@ -236,7 +268,10 @@ mod tests {
             deterministic_bundle_hash(&second.data).expect("hash second")
         );
 
-        let different_data = sample_bundle("other");
+        let different_data = sample_bundle(HashMap::from_iter([(
+            "name".to_string(),
+            "other".to_string(),
+        )]));
         assert_ne!(
             deterministic_bundle_hash(&data).expect("hash original"),
             deterministic_bundle_hash(&different_data).expect("hash changed")

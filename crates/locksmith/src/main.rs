@@ -14,7 +14,7 @@ async fn main() {
     let policy = locksmith::bundle::KeymakerPcrPolicy::from_json(&policy_text)
         .expect("valid Keymaker PCR policy JSON");
     let bundle_text = std::fs::read_to_string(bundlefile).expect("has bundle");
-    let bundle = locksmith::bundle::load_json(&bundle_text, &policy, std::time::SystemTime::now())
+    let bundle = locksmith::bundle::load_json(&bundle_text, &policy)
         .expect("valid verified bundle json");
     let status = locksmith::client::send_shard(
         address.parse().expect("should pass IP:port, probably port 49504"),

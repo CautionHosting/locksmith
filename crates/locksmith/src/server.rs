@@ -1,4 +1,7 @@
-use crate::{bundle::QuorumBundle, models};
+use crate::{
+    bundle::{QuorumBundle, QuorumBundleExt},
+    models,
+};
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, consts::U12},
