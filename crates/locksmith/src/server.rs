@@ -1,7 +1,4 @@
-use crate::{
-    bundle::{QuorumBundle, QuorumBundleExt},
-    models,
-};
+use crate::{bundle::QuorumBundle, models};
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, consts::U12},
@@ -10,6 +7,7 @@ use blahaj::{Share, Sharks};
 use bootproof::format::{Format, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
+use keymaker_models::generate_quorum::v1::Key;
 use sha2::Sha256;
 use std::fmt::Write;
 use std::panic::Location;
@@ -194,13 +192,19 @@ async fn handle_client(
     .with_contexts((), ErrorKind::ReceiveRequest)?;
 
     debug!("verifying signed request from user");
-    let keyring = bundle
-        .openpgp_keyring()
-        .map_err(|source| ReceiveShardsError {
-            kind: ErrorKind::BundleAccess,
-            location: Location::caller(),
-            source: Some(Box::new(source)),
-        })?;
+    let bundle = bundle.to_latest();
+    let mut keyring = String::new();
+    for key in &bundle.keyring {
+        match key {
+            Key::OpenPGP { cert } => {
+                keyring.push_str(cert);
+                keyring.push('\n');
+            }
+            Key::WebAuthn { .. } => {
+                unimplemented!("WebAuthn shard transport is not implemented yet")
+            }
+        }
+    }
     let signed_request = match crate::openpgp::verify_detached(
         &keyring,
         &request.signed_payload,

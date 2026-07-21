@@ -1,7 +1,4 @@
-use crate::{
-    bundle::{QuorumBundle, QuorumBundleExt},
-    models,
-};
+use crate::{bundle::QuorumBundle, models};
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, consts::U12},
@@ -10,6 +7,7 @@ use bootproof_sdk::format::{VerifiableSignedAttestationFormat, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
 use keyfork_shard::{Format, openpgp::OpenPGP};
+use keymaker_models::generate_quorum::v1::Key;
 use rand::Rng;
 use serde_cbor::Value as CborValue;
 use sha2::Sha256;
@@ -140,13 +138,21 @@ pub async fn send_shard(
     let temp_ph = std::rc::Rc::new(std::sync::Mutex::new(
         keyfork_prompt::default_handler().expect("please give us a handler"),
     ));
-    let keyring = bundle.openpgp_keyring().map_err(|source| SendShardError {
-        kind: ErrorKind::BundleAccess,
-        location: Location::caller(),
-        source: Box::new(source),
-    })?;
+    let bundle = bundle.clone().to_latest();
+    let mut keyring = String::new();
+    for key in &bundle.keyring {
+        match key {
+            Key::OpenPGP { cert } => {
+                keyring.push_str(cert);
+                keyring.push('\n');
+            }
+            Key::WebAuthn { .. } => {
+                unimplemented!("WebAuthn shard transport is not implemented yet")
+            }
+        }
+    }
     let messages = OpenPGP
-        .parse_shard_file(bundle.shardfile().as_bytes())
+        .parse_shard_file(bundle.shardfile.as_bytes())
         .with_contexts((), ErrorKind::ParseShardfile)?;
     // NOTE: This code is very error prone and only incidentally works.
     // It is not dyn compatible.

@@ -1,8 +1,7 @@
 use bootproof_sdk::format::{VerifiableSignedAttestationFormat as _, nitro::Nitro};
-use coset::{CborSerializable as _, CoseSign1};
 use keymaker_models::generate_quorum::{
     GenerateQuorumBundle, GenerateQuorumResponse, deterministic_bundle_hash,
-    deterministic_necroproof_nonce, v1,
+    deterministic_necroproof_nonce,
 };
 use serde::Deserialize as _;
 use serde_cbor::Value as CborValue;
@@ -10,56 +9,6 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 pub type QuorumBundle = GenerateQuorumBundle;
-
-pub trait QuorumBundleExt {
-    fn shardfile(&self) -> &str;
-    fn public_key(&self) -> &str;
-    fn openpgp_keyring(&self) -> Result<String, BundleAccessorError>;
-}
-
-impl QuorumBundleExt for GenerateQuorumBundle {
-    fn shardfile(&self) -> &str {
-        match self {
-            Self::V1(bundle) => &bundle.shardfile,
-        }
-    }
-
-    fn public_key(&self) -> &str {
-        match self {
-            Self::V1(bundle) => &bundle.public_key,
-        }
-    }
-
-    fn openpgp_keyring(&self) -> Result<String, BundleAccessorError> {
-        match self {
-            Self::V1(bundle) => openpgp_keyring_from_v1(&bundle.keyring),
-        }
-    }
-}
-
-fn openpgp_keyring_from_v1(keyring: &[v1::Key]) -> Result<String, BundleAccessorError> {
-    let mut armored = String::new();
-    for (index, key) in keyring.iter().enumerate() {
-        match key {
-            v1::Key::OpenPGP { cert } => {
-                armored.push_str(cert);
-                armored.push('\n');
-            }
-            v1::Key::WebAuthn { .. } => {
-                return Err(BundleAccessorError::UnsupportedWebAuthnKey { index });
-            }
-        }
-    }
-    Ok(armored)
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum BundleAccessorError {
-    #[error(
-        "bundle keyring entry {index} requires WebAuthn setup, which this OpenPGP path does not support yet"
-    )]
-    UnsupportedWebAuthnKey { index: usize },
-}
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,6 +31,13 @@ impl KeymakerPcrSet {
         };
         at < SystemTime::UNIX_EPOCH + Duration::from_secs(expires_at)
     }
+
+    fn certificate_verification_time(&self) -> SystemTime {
+        self.expires_at_unix_seconds
+            .and_then(|expires_at| expires_at.checked_sub(1))
+            .map(|expires_at| SystemTime::UNIX_EPOCH + Duration::from_secs(expires_at))
+            .unwrap_or_else(SystemTime::now)
+    }
 }
 
 impl KeymakerPcrPolicy {
@@ -96,19 +52,25 @@ impl KeymakerPcrPolicy {
         nonce: &[u8],
         expected_user_data: &[u8],
     ) -> Result<(), VerifyNecroproofError> {
-        let at = necroproof_timestamp(necroproof)?;
         let mut attempts = 0;
-        for pcr_set in self.sets.iter().filter(|set| set.is_valid_at(at)) {
+        for pcr_set in &self.sets {
             attempts += 1;
-            if verify_necroproof_with_pcrs(necroproof, &pcr_set.pcrs, nonce, expected_user_data, at)
-                .is_ok()
-            {
+            let Ok(attestation_timestamp) = verify_necroproof_with_pcrs(
+                necroproof,
+                &pcr_set.pcrs,
+                nonce,
+                expected_user_data,
+                pcr_set.certificate_verification_time(),
+            ) else {
+                continue;
+            };
+            if pcr_set.is_valid_at(attestation_timestamp) {
                 return Ok(());
             }
         }
 
         if attempts == 0 {
-            return Err(VerifyNecroproofError::NoActivePcrSets);
+            return Err(VerifyNecroproofError::NoPcrSets);
         }
         Err(VerifyNecroproofError::NoMatchingPcrSet { attempts })
     }
@@ -143,7 +105,7 @@ fn verify_necroproof_with_pcrs(
     nonce: &[u8],
     expected_user_data: &[u8],
     at: SystemTime,
-) -> Result<(), VerifyNecroproofError> {
+) -> Result<SystemTime, VerifyNecroproofError> {
     let at_since_epoch = at
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
@@ -152,36 +114,12 @@ fn verify_necroproof_with_pcrs(
     let document = attestation
         .verify(at_since_epoch, &nonce)
         .map_err(|source| VerifyNecroproofError::RejectedByBootproof { source })?;
+    let attestation_timestamp = get_timestamp(&document)?;
     let user_data = get_user_data(document)?;
     if user_data != expected_user_data {
         return Err(VerifyNecroproofError::UserDataMismatch);
     }
-    Ok(())
-}
-
-fn necroproof_timestamp(necroproof: &[u8]) -> Result<SystemTime, VerifyNecroproofError> {
-    let cose_signed_blob =
-        CoseSign1::from_slice(necroproof).map_err(|source| VerifyNecroproofError::DecodeCose {
-            source: Box::new(source),
-        })?;
-    let payload_bytes = cose_signed_blob
-        .payload
-        .as_ref()
-        .ok_or(VerifyNecroproofError::MissingTimestamp)?;
-    let payload: CborValue = serde_cbor::from_slice(payload_bytes)
-        .map_err(|source| VerifyNecroproofError::DecodeDocument { source })?;
-    let CborValue::Map(map) = payload else {
-        return Err(VerifyNecroproofError::MissingTimestamp);
-    };
-    let timestamp_millis = match map.get(&CborValue::Text("timestamp".into())) {
-        Some(CborValue::Integer(timestamp)) => {
-            u64::try_from(*timestamp).map_err(|_| VerifyNecroproofError::InvalidTimestamp {
-                timestamp: *timestamp,
-            })?
-        }
-        _ => return Err(VerifyNecroproofError::MissingTimestamp),
-    };
-    Ok(SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp_millis))
+    Ok(attestation_timestamp)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -204,12 +142,6 @@ pub enum VerifyNecroproofError {
     #[error("keymaker necroproof document does not contain bytes user_data")]
     MissingUserData,
 
-    #[error("could not decode keymaker necroproof COSE wrapper")]
-    DecodeCose {
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
     #[error("keymaker necroproof document does not contain a timestamp")]
     MissingTimestamp,
 
@@ -222,8 +154,8 @@ pub enum VerifyNecroproofError {
         source: serde_cbor::Error,
     },
 
-    #[error("keymaker PCR policy did not contain any PCR sets valid at the necroproof timestamp")]
-    NoActivePcrSets,
+    #[error("keymaker PCR policy did not contain any PCR sets")]
+    NoPcrSets,
 
     #[error("keymaker necroproof did not match any PCR set valid at the necroproof timestamp")]
     NoMatchingPcrSet { attempts: usize },
@@ -232,6 +164,21 @@ pub enum VerifyNecroproofError {
 #[derive(Debug, serde::Deserialize)]
 struct OpaqueContainsUserData {
     user_data: serde_bytes::ByteBuf,
+}
+
+fn get_timestamp(document: &CborValue) -> Result<SystemTime, VerifyNecroproofError> {
+    let CborValue::Map(map) = document else {
+        return Err(VerifyNecroproofError::MissingTimestamp);
+    };
+    let timestamp_millis = match map.get(&CborValue::Text("timestamp".into())) {
+        Some(CborValue::Integer(timestamp)) => {
+            u64::try_from(*timestamp).map_err(|_| VerifyNecroproofError::InvalidTimestamp {
+                timestamp: *timestamp,
+            })?
+        }
+        _ => return Err(VerifyNecroproofError::MissingTimestamp),
+    };
+    Ok(SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp_millis))
 }
 
 fn get_user_data(document: CborValue) -> Result<Vec<u8>, VerifyNecroproofError> {
@@ -308,10 +255,6 @@ pub fn load_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coset::CoseSign1;
-    use keymaker_models::generate_quorum::v1;
-    use serde_cbor::Value;
-    use std::collections::BTreeMap;
     use std::time::{Duration, SystemTime};
 
     fn sample_json(necroproof: Vec<u8>) -> String {
@@ -334,20 +277,6 @@ mod tests {
             pcrs: HashMap::from_iter([(0, vec![pcr0]), (1, vec![1]), (2, vec![2])]),
             expires_at_unix_seconds,
         }
-    }
-
-    fn cose_with_timestamp(timestamp_millis: i128) -> Vec<u8> {
-        let mut map = BTreeMap::new();
-        map.insert(
-            Value::Text("timestamp".to_string()),
-            Value::Integer(timestamp_millis),
-        );
-        CoseSign1 {
-            payload: Some(serde_cbor::to_vec(&Value::Map(map)).expect("payload")),
-            ..Default::default()
-        }
-        .to_vec()
-        .expect("cose")
     }
 
     #[test]
@@ -378,17 +307,6 @@ mod tests {
     }
 
     #[test]
-    fn necroproof_timestamp_is_read_from_cose_payload() {
-        let at = necroproof_timestamp(&cose_with_timestamp(1_234)).expect("timestamp");
-
-        assert_eq!(
-            at.duration_since(SystemTime::UNIX_EPOCH)
-                .expect("after epoch"),
-            Duration::from_millis(1_234)
-        );
-    }
-
-    #[test]
     fn empty_necroproof_fails_closed() {
         let json = sample_json(vec![]);
         let policy = KeymakerPcrPolicy {
@@ -398,25 +316,6 @@ mod tests {
         assert!(matches!(
             load_json(&json, &policy),
             Err(LoadQuorumBundleError::EmptyNecroproof)
-        ));
-    }
-
-    #[test]
-    fn v1_web_authn_key_material_is_preserved_but_current_openpgp_accessors_reject_it() {
-        let bundle = GenerateQuorumBundle::V1(v1::GenerateQuorumResponse {
-            bundle_id: [3; 16],
-            label: Default::default(),
-            keyring: vec![v1::Key::WebAuthn {
-                credential: vec!["credential-a".to_string()],
-                cert: "cert-a".to_string(),
-            }],
-            shardfile: "shards".to_string(),
-            public_key: "public".to_string(),
-        });
-
-        assert!(matches!(
-            bundle.openpgp_keyring(),
-            Err(BundleAccessorError::UnsupportedWebAuthnKey { index: 0 })
         ));
     }
 }
