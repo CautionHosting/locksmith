@@ -278,9 +278,13 @@ pub fn derive_public_certificate(
     });
     let bundle_hash =
         deterministic_bundle_hash(&data).map_err(DerivePublicCertificateError::HashBundle)?;
-    let necroproof = Nitro
-        .generate(Some(&bundle_hash), None)
-        .map_err(DerivePublicCertificateError::GenerateNecroproof)?;
+    let necroproof = if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+        bundle_hash.to_vec()
+    } else {
+        Nitro
+            .generate(Some(&bundle_hash), None)
+            .map_err(DerivePublicCertificateError::GenerateNecroproof)?
+    };
 
     Ok(Proofed { data, necroproof })
 }

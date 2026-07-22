@@ -175,14 +175,17 @@ pub async fn generate_quorum(
         .join("\n");
 
     debug!(?label, ?threshold, ?max);
-    keyfork_entropy::ensure_safe();
+    let entropy: [u8; 32] = if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+        [7u8; 32]
+    } else {
+        keyfork_entropy::ensure_safe();
+        keyfork_entropy::generate_entropy_of_const_size().with_contexts((), ErrorKind::Entropy)?
+    };
 
     let certs =
         parse_certs(&keyring_certs).with_contexts((), GenerateQuorumErrorKind::ParseCerts)?;
 
     let opgp = OpenPGP;
-    let entropy: [u8; 32] =
-        keyfork_entropy::generate_entropy_of_const_size().with_contexts((), ErrorKind::Entropy)?;
 
     let mut shardfile_bytes = vec![];
     opgp.shard_and_encrypt(threshold, max, &entropy, &*certs, &mut shardfile_bytes)
@@ -255,13 +258,17 @@ pub async fn generate_quorum(
     let bundle_hash = deterministic_bundle_hash(&data).with_contexts((), ErrorKind::HashBundle)?;
     let nonce = deterministic_necroproof_nonce(&bundle_hash)
         .with_contexts((), ErrorKind::DeriveNecroproofNonce)?;
-    let necroproof = Nitro
-        .generate(Some(&bundle_hash), Some(&nonce))
-        .map_err(|source| GenerateQuorumError {
-            kind: ErrorKind::GenerateNecroproof,
-            source: Some(source),
-            location: Location::caller(),
-        })?;
+    let necroproof = if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+        nonce.to_vec()
+    } else {
+        Nitro
+            .generate(Some(&bundle_hash), Some(&nonce))
+            .map_err(|source| GenerateQuorumError {
+                kind: ErrorKind::GenerateNecroproof,
+                source: Some(source),
+                location: Location::caller(),
+            })?
+    };
 
     Ok(Json(Proofed { data, necroproof }))
 }

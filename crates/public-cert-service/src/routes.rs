@@ -27,6 +27,7 @@ pub enum DerivePublicCertificatesError {
 
 impl IntoResponse for DerivePublicCertificatesError {
     fn into_response(self) -> Response {
+        tracing::warn!(error = ?self, "public certificate derivation failed");
         let status = match self {
             Self::Derive(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
