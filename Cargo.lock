@@ -412,7 +412,7 @@ dependencies = [
 [[package]]
 name = "bootproof"
 version = "0.1.0"
-source = "git+https://codeberg.org/caution/bootproof.git?rev=53a93872c17c22a253e4ecb8ade00c5964762e45#53a93872c17c22a253e4ecb8ade00c5964762e45"
+source = "git+https://codeberg.org/caution/bootproof.git?rev=b03721957e3850931f5b53627e7c3d1c302a06fe#b03721957e3850931f5b53627e7c3d1c302a06fe"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "serde_bytes",
@@ -423,7 +423,7 @@ dependencies = [
 [[package]]
 name = "bootproof-sdk"
 version = "0.1.0"
-source = "git+https://codeberg.org/caution/bootproof.git?rev=53a93872c17c22a253e4ecb8ade00c5964762e45#53a93872c17c22a253e4ecb8ade00c5964762e45"
+source = "git+https://codeberg.org/caution/bootproof.git?rev=b03721957e3850931f5b53627e7c3d1c302a06fe#b03721957e3850931f5b53627e7c3d1c302a06fe"
 dependencies = [
  "coset",
  "ring",
