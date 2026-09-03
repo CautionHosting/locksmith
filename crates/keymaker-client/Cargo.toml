@@ -2,7 +2,8 @@
 name = "keymaker-client"
 version = "0.1.0"
 edition = "2024"
-license.workspace = true
+license = "MIT"
+publish.workspace = true
 
 [dependencies]
 keymaker-models = { version = "0.1.0", path = "../keymaker-models" }

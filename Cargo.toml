@@ -11,3 +11,4 @@ members = [
 
 [workspace.package]
 license = "AGPL-3.0-only OR LicenseRef-Caution-Commercial"
+publish = false
