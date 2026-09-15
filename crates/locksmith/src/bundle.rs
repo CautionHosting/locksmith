@@ -278,6 +278,21 @@ pub fn load_response(
     let nonce = deterministic_necroproof_nonce(&bundle_hash)
         .map_err(|source| LoadQuorumBundleError::DeriveNonce { source })?;
 
+    // This proof is only a deterministic test checksum, never Nitro evidence.
+    #[cfg(feature = "unsafe-e2e")]
+    if std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1")
+        && policy.sets.len() == 1
+        && policy.sets[0].expires_at_unix_seconds.is_none()
+        && policy.sets[0].pcrs.len() == 3
+        && (0..=2).all(|index| {
+            policy.sets[0].pcrs.get(&index).is_some_and(|pcr| pcr == &[0xab; 48])
+        })
+        && response.necroproof == nonce
+    {
+        tracing::warn!("accepting synthetic Keymaker proof in unsafe-e2e build");
+        return Ok(response.data);
+    }
+
     policy
         .verify_necroproof(&response.necroproof, &nonce, &bundle_hash)
         .map_err(|source| LoadQuorumBundleError::VerifyNecroproof { source })?;

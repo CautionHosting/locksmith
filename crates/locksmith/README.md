@@ -44,3 +44,26 @@ still needs the shared Bootproof fix. Tests use fixed policy dates with
 `53a93872c17c22a253e4ecb8ade00c5964762e45`,
 `crates/bootproof-sdk/src/format/data/aws-test.cbor`. This signed AWS fixture
 tests the low-level verifier and policy selection, not a proofed quorum bundle.
+
+### Synthetic Keymaker proofs (tests only)
+
+The non-default `unsafe-e2e` feature permits the existing Keymaker test proof only
+when `CAUTION_UNSAFE_KEY_SERVICE_E2E=1` and the policy has exactly one non-expiring
+set: PCRs 0, 1 and 2, each the byte `ab` repeated 48 times (96 hex characters).
+The proof must equal the deterministic nonce recomputed from the canonical bundle
+hash. Changed bundles, wrong proofs and other policies are rejected. Production
+builds still reject this proof even with the environment variable set; normal
+Nitro verification and the bundle format are unchanged.
+
+Run `cargo test -p locksmith --test synthetic_proof` both without and with
+`--features unsafe-e2e`. Each run checks absent, `0` and `1` runtime flags in
+separate processes. Build the mock Keymaker with
+`cargo build -p keymaker --no-default-features --features unsafe-e2e` and launch
+it with the same environment flag. Never use these binaries or PCR values in a
+production deployment. This exercises PGP orchestration, not attestation security.
+
+[Design #7](https://codeberg.org/caution/locksmith/issues/7) remains authoritative:
+V0 fallback/upgrade is deferred under [#11](https://codeberg.org/caution/locksmith/issues/11)
+and PR #15; WebAuthn recryption is under [#12](https://codeberg.org/caution/locksmith/issues/12).
+This test hook completes neither ticket. Real Nitro validation and production
+policy provisioning remain release dependencies.
