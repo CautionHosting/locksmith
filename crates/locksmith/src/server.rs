@@ -7,7 +7,6 @@ use blahaj::{Share, Sharks};
 use bootproof::format::{Format, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
-use keymaker_models::generate_quorum::v1::Key;
 use sha2::Sha256;
 use std::fmt::Write;
 use std::panic::Location;
@@ -193,18 +192,8 @@ async fn handle_client(
 
     debug!("verifying signed request from user");
     let bundle = bundle.to_latest();
-    let mut keyring = String::new();
-    for key in &bundle.keyring {
-        match key {
-            Key::OpenPGP { cert } => {
-                keyring.push_str(cert);
-                keyring.push('\n');
-            }
-            Key::WebAuthn { .. } => {
-                unimplemented!("WebAuthn shard transport is not implemented yet")
-            }
-        }
-    }
+    let keyring = crate::openpgp::reconstruct_keyring(&bundle.keyring)
+        .with_contexts((), ErrorKind::BundleAccess)?;
     let signed_request = match crate::openpgp::verify_detached(
         &keyring,
         &request.signed_payload,

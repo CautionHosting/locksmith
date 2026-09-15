@@ -1,21 +1,31 @@
+mod main_args;
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let mut args = std::env::args().skip(1);
-    let address = args.next().expect("pass in socket address please");
-    let bundlefile = args.next().unwrap_or_else(|| "bundle.json".into());
-    let policyfile = args
-        .next()
-        .or_else(|| std::env::var("KEYMAKER_PCR_POLICY_JSON").ok())
-        .expect("pass Keymaker PCR policy JSON path or set KEYMAKER_PCR_POLICY_JSON");
+    let args = match main_args::parse(
+        std::env::args().skip(1),
+        std::env::var("KEYMAKER_PCR_POLICY_JSON").ok(),
+    ) {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("{error}\n{}", main_args::USAGE);
+            std::process::exit(2);
+        }
+    };
+    let main_args::Args {
+        address,
+        bundlefile,
+        policyfile,
+    } = args;
 
     let policy_text = std::fs::read_to_string(policyfile).expect("has Keymaker PCR policy");
     let policy = locksmith::bundle::KeymakerPcrPolicy::from_json(&policy_text)
         .expect("valid Keymaker PCR policy JSON");
     let bundle_text = std::fs::read_to_string(bundlefile).expect("has bundle");
-    let bundle = locksmith::bundle::load_json(&bundle_text, &policy)
-        .expect("valid verified bundle json");
+    let bundle =
+        locksmith::bundle::load_json(&bundle_text, &policy).expect("valid verified bundle json");
     let status = locksmith::client::send_shard(
         address.parse().expect("should pass IP:port, probably port 49504"),
         std::collections::HashMap::from_iter([

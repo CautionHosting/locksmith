@@ -34,5 +34,6 @@ nix = { version = "0.31.2", default-features = false, features = ["reboot"], opt
 reqwest = "0.13.2"
 
 [features]
+unsafe-e2e = []
 default = ["selfnuke"]
 selfnuke = ["dep:nix"]

@@ -52,27 +52,34 @@ impl KeymakerPcrPolicy {
         nonce: &[u8],
         expected_user_data: &[u8],
     ) -> Result<(), VerifyNecroproofError> {
-        let mut attempts = 0;
-        for pcr_set in &self.sets {
-            attempts += 1;
-            let Ok(attestation_timestamp) = verify_necroproof_with_pcrs(
+        if self.sets.is_empty() {
+            return Err(VerifyNecroproofError::NoPcrSets);
+        }
+        let mut errors = Vec::new();
+        for (index, pcr_set) in self.sets.iter().enumerate() {
+            match verify_necroproof_with_pcrs(
                 necroproof,
                 &pcr_set.pcrs,
                 nonce,
                 expected_user_data,
                 pcr_set.certificate_verification_time(),
-            ) else {
-                continue;
-            };
-            if pcr_set.is_valid_at(attestation_timestamp) {
-                return Ok(());
+            ) {
+                Ok(at) if pcr_set.is_valid_at(at) => return Ok(()),
+                Ok(_) => errors.push((
+                    index,
+                    VerifyNecroproofError::PolicyExpired {
+                        expires_at_unix_seconds: pcr_set
+                            .expires_at_unix_seconds
+                            .expect("only expiring PCR sets can be invalid at a timestamp"),
+                    },
+                )),
+                Err(error) => errors.push((index, error)),
             }
         }
-
-        if attempts == 0 {
-            return Err(VerifyNecroproofError::NoPcrSets);
-        }
-        Err(VerifyNecroproofError::NoMatchingPcrSet { attempts })
+        Err(VerifyNecroproofError::NoMatchingPcrSet {
+            attempts: errors.len(),
+            errors,
+        })
     }
 }
 
@@ -157,8 +164,34 @@ pub enum VerifyNecroproofError {
     #[error("keymaker PCR policy did not contain any PCR sets")]
     NoPcrSets,
 
-    #[error("keymaker necroproof did not match any PCR set valid at the necroproof timestamp")]
-    NoMatchingPcrSet { attempts: usize },
+    #[error("PCR policy expired at Unix second {expires_at_unix_seconds}")]
+    PolicyExpired { expires_at_unix_seconds: u64 },
+
+    #[error("keymaker necroproof did not match any PCR set valid at the necroproof timestamp ({attempts} attempts): {details}", details = PcrFailures(.errors))]
+    NoMatchingPcrSet {
+        attempts: usize,
+        errors: Vec<(usize, VerifyNecroproofError)>,
+    },
+}
+
+// Error::source exposes one chain; show every attempted set without dumping proof data.
+struct PcrFailures<'a>(&'a [(usize, VerifyNecroproofError)]);
+
+impl std::fmt::Display for PcrFailures<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (position, (index, error)) in self.0.iter().enumerate() {
+            if position != 0 {
+                f.write_str("; ")?;
+            }
+            write!(f, "set {index}: {error}")?;
+            let mut source = std::error::Error::source(error);
+            while let Some(cause) = source {
+                write!(f, ": {cause}")?;
+                source = cause.source();
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -319,3 +352,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "bundle_verification_tests.rs"]
+mod verification_tests;

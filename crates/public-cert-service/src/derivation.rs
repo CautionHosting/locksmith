@@ -278,20 +278,57 @@ pub fn derive_public_certificate(
     });
     let bundle_hash =
         deterministic_bundle_hash(&data).map_err(DerivePublicCertificateError::HashBundle)?;
-    let necroproof = if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
-        bundle_hash.to_vec()
-    } else {
-        Nitro
-            .generate(Some(&bundle_hash), None)
-            .map_err(DerivePublicCertificateError::GenerateNecroproof)?
-    };
+    let necroproof = generate_necroproof(&bundle_hash)?;
 
     Ok(Proofed { data, necroproof })
+}
+
+fn generate_necroproof(bundle_hash: &[u8]) -> Result<Vec<u8>, DerivePublicCertificateError> {
+    #[cfg(feature = "unsafe-e2e")]
+    if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+        tracing::warn!("UNSAFE E2E: returning a fake public-certificate proof");
+        return Ok(bundle_hash.to_vec());
+    }
+    Nitro
+        .generate(Some(bundle_hash), None)
+        .map_err(DerivePublicCertificateError::GenerateNecroproof)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsafe_proof_requires_feature_and_environment() {
+        const CHILD: &str = "PUBLIC_CERT_HOOK_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let enabled = cfg!(feature = "unsafe-e2e")
+                && std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some();
+            let proof = generate_necroproof(&[3; 32]);
+            assert_eq!(proof.as_ref().is_ok_and(|proof| proof == &[3; 32]), enabled);
+            return;
+        }
+        for enabled in [false, true] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "derivation::tests::unsafe_proof_requires_feature_and_environment",
+                ])
+                .env(CHILD, "1")
+                .env_remove("CAUTION_UNSAFE_KEY_SERVICE_E2E");
+            if enabled {
+                child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", "1");
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     const ORG_ID: [u8; 16] = [
         0x00, 0x11, 0x22, 0x33, 0x84, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,

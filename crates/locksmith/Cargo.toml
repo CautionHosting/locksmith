@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+unsafe-e2e = []
 default = ["rpgpie"]
 rpgpie = [
 	"dep:card-backend-pcsc",

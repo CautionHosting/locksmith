@@ -2,6 +2,9 @@ use dterror::*;
 use std::panic::Location;
 use structstruck::strike;
 
+mod keyring;
+pub(crate) use keyring::reconstruct_keyring;
+
 #[derive(Debug, thiserror::Error)]
 #[error("Invalid PIN length: provided {provided_length} < expected 6")]
 pub struct PinLengthError {

@@ -13,6 +13,7 @@ use openpgp::{
     serialize::Serialize as _,
     types::KeyFlags,
 };
+use std::collections::HashSet;
 use std::panic::Location;
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -26,59 +27,16 @@ use keymaker_models::{
     },
 };
 
-#[derive(Debug, thiserror::Error)]
-#[error("could not parse valid certificates [{location}]")]
-pub struct ParseCertificatesError {
-    location: &'static Location<'static>,
-    #[source]
-    source: anyhow::Error,
-}
-
-impl From<anyhow::Error> for ParseCertificatesError {
-    #[track_caller]
-    fn from(source: anyhow::Error) -> Self {
-        Self {
-            location: Location::caller(),
-            source,
-        }
-    }
-}
-
-fn parse_certs(armored_input: &str) -> Result<Vec<Cert>, ParseCertificatesError> {
-    let cert_parser = CertParser::from_bytes(armored_input)?;
-    let mut certs = vec![];
-    let policy = openpgp::policy::StandardPolicy::new();
-
-    for parseable_cert in cert_parser {
-        let cert = parseable_cert?;
-        let valid_cert = cert.with_policy(&policy, None)?;
-        let has_auth = valid_cert.keys().for_authentication().next().is_some();
-        let has_enc = valid_cert.keys().for_storage_encryption().next().is_some();
-
-        if has_auth && has_enc {
-            certs.push(cert);
-        } else {
-            warn!(
-                ?has_auth,
-                ?has_enc,
-                key_id = ?valid_cert.keyid(),
-                "key does not have both auth and enc"
-            );
-        }
-    }
-
-    Ok(certs)
-}
-
 structstruck::strike! {
     #[structstruck::each[derive(Debug)]]
     #[derive(thiserror::Error)]
-    #[error("could not generate quorum [{location}]")]
+    #[error("could not generate quorum ({kind:?}) [{location}]")]
     #[non_exhaustive]
     pub struct GenerateQuorumError {
         kind: pub enum GenerateQuorumErrorKind {
             Entropy,
-            ParseCerts,
+            InvalidQuorumParameters,
+            InvalidCertificate { index: usize, reason: &'static str },
             Shard,
             DeriveOpenPGPCert,
             SerializeOpenPGPCert,
@@ -119,7 +77,8 @@ impl axum::response::IntoResponse for GenerateQuorumError {
             | GenerateQuorumErrorKind::HashBundle
             | GenerateQuorumErrorKind::DeriveNecroproofNonce
             | GenerateQuorumErrorKind::GenerateNecroproof => StatusCode::INTERNAL_SERVER_ERROR,
-            GenerateQuorumErrorKind::ParseCerts => StatusCode::BAD_REQUEST,
+            GenerateQuorumErrorKind::InvalidQuorumParameters
+            | GenerateQuorumErrorKind::InvalidCertificate { .. } => StatusCode::BAD_REQUEST,
         };
 
         crate::middleware::error_handling::ErrorResponse::from_error(&self)
@@ -127,12 +86,116 @@ impl axum::response::IntoResponse for GenerateQuorumError {
     }
 }
 
-/// Generate a new quorum for the provided keys.
-///
-/// The provided keyrings are concatenated with each other and hashed. The keyrings are then
-/// provided to keyforkd to verify incoming requests to reachieve quorum. keyforkd compares the
-/// keyring hashes against the ones baked into its enclave image before allowing a shard to be
-/// entered into quorum.
+impl GenerateQuorumError {
+    #[track_caller]
+    fn invalid(kind: GenerateQuorumErrorKind) -> Self {
+        Self {
+            kind,
+            source: None,
+            location: Location::caller(),
+        }
+    }
+}
+
+fn validate_request(request: &v1::GenerateQuorumRequest) -> Result<Vec<Cert>, GenerateQuorumError> {
+    use GenerateQuorumErrorKind as Kind;
+    if request.threshold == 0
+        || request.threshold > request.max
+        || request.max == 255
+        || usize::from(request.max) != request.keyring.len()
+    {
+        return Err(GenerateQuorumError::invalid(Kind::InvalidQuorumParameters));
+    }
+    let mut policy = openpgp::policy::StandardPolicy::new();
+    policy.good_critical_notations(&["organization-id@caution.co", "bundle-id@caution.co"]);
+    let mut primary_keys = HashSet::new();
+    let mut encryption_keys = HashSet::new();
+    let mut certs = Vec::with_capacity(request.keyring.len());
+    for (index, key) in request.keyring.iter().enumerate() {
+        let armored = match key {
+            v1::Key::OpenPGP { cert } | v1::Key::WebAuthn { cert, .. } => cert,
+        };
+        let invalid =
+            |reason| GenerateQuorumError::invalid(Kind::InvalidCertificate { index, reason });
+        let mut parser =
+            CertParser::from_bytes(armored).map_err(|_| invalid("malformed certificate"))?;
+        let cert = parser
+            .next()
+            .ok_or_else(|| invalid("missing certificate"))?
+            .map_err(|_| invalid("malformed certificate"))?;
+        if parser.next().is_some() {
+            return Err(invalid("each holder must contain exactly one certificate"));
+        }
+        let valid_cert = cert
+            .with_policy(&policy, None)
+            .map_err(|_| invalid("certificate does not satisfy policy"))?;
+        if valid_cert.alive().is_err()
+            || matches!(
+                valid_cert.revocation_status(),
+                openpgp::types::RevocationStatus::Revoked(_)
+            )
+        {
+            return Err(invalid("certificate is expired or revoked"));
+        }
+        let keys = || {
+            cert.keys()
+                .with_policy(&policy, None)
+                .supported()
+                .alive()
+                .revoked(false)
+        };
+        if cert.is_tsk()
+            || keys().for_signing().next().is_none()
+            || keys().for_authentication().next().is_none()
+            || keys().for_storage_encryption().next().is_none()
+        {
+            return Err(invalid(
+                "requires a public certificate with live signing, authentication and storage-encryption keys",
+            ));
+        }
+        if !primary_keys.insert(cert.fingerprint()) {
+            return Err(invalid("duplicate holder certificate"));
+        }
+        for key in keys().for_storage_encryption() {
+            if !encryption_keys.insert(key.key().mpis().clone()) {
+                return Err(invalid("holders must not share an encryption key"));
+            }
+        }
+        certs.push(cert);
+    }
+    Ok(certs)
+}
+
+fn generate_entropy() -> Result<[u8; 32], GenerateQuorumError> {
+    #[cfg(feature = "unsafe-e2e")]
+    if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+        warn!("UNSAFE E2E: using constant quorum entropy");
+        return Ok([7u8; 32]);
+    }
+    keyfork_entropy::ensure_safe();
+    keyfork_entropy::generate_entropy_of_const_size()
+        .with_contexts((), GenerateQuorumErrorKind::Entropy)
+}
+
+fn generate_necroproof(bundle_hash: &[u8], nonce: &[u8]) -> Result<Vec<u8>, GenerateQuorumError> {
+    #[cfg(feature = "unsafe-e2e")]
+    if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+        warn!("UNSAFE E2E: returning a fake Keymaker proof");
+        return Ok(nonce.to_vec());
+    }
+    Nitro
+        .generate(Some(bundle_hash), Some(nonce))
+        .map_err(|source| {
+            GenerateQuorumError::from_contexts(
+                (),
+                GenerateQuorumErrorKind::GenerateNecroproof,
+                Location::caller(),
+                source,
+            )
+        })
+}
+
+/// Generate encrypted shares and bind the original structured holders into the proofed bundle.
 #[axum::debug_handler]
 #[tracing::instrument(skip_all)]
 pub async fn generate_quorum(
@@ -159,31 +222,18 @@ pub async fn generate_quorum(
     });
 
     use GenerateQuorumErrorKind as ErrorKind;
+    let request = request.to_latest();
+    let certs = validate_request(&request)?;
     let v1::GenerateQuorumRequest {
         bundle_id,
         label,
         threshold,
         max,
         keyring,
-    } = request.to_latest();
-    let keyring_certs = keyring
-        .iter()
-        .map(|key| match key {
-            v1::Key::OpenPGP { cert } | v1::Key::WebAuthn { cert, .. } => cert.as_str(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    } = request;
 
     debug!(?label, ?threshold, ?max);
-    let entropy: [u8; 32] = if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
-        [7u8; 32]
-    } else {
-        keyfork_entropy::ensure_safe();
-        keyfork_entropy::generate_entropy_of_const_size().with_contexts((), ErrorKind::Entropy)?
-    };
-
-    let certs =
-        parse_certs(&keyring_certs).with_contexts((), GenerateQuorumErrorKind::ParseCerts)?;
+    let entropy = generate_entropy()?;
 
     let opgp = OpenPGP;
 
@@ -258,17 +308,11 @@ pub async fn generate_quorum(
     let bundle_hash = deterministic_bundle_hash(&data).with_contexts((), ErrorKind::HashBundle)?;
     let nonce = deterministic_necroproof_nonce(&bundle_hash)
         .with_contexts((), ErrorKind::DeriveNecroproofNonce)?;
-    let necroproof = if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
-        nonce.to_vec()
-    } else {
-        Nitro
-            .generate(Some(&bundle_hash), Some(&nonce))
-            .map_err(|source| GenerateQuorumError {
-                kind: ErrorKind::GenerateNecroproof,
-                source: Some(source),
-                location: Location::caller(),
-            })?
-    };
+    let necroproof = generate_necroproof(&bundle_hash, &nonce)?;
 
     Ok(Json(Proofed { data, necroproof }))
 }
+
+#[cfg(test)]
+#[path = "generate_quorum_tests.rs"]
+mod tests;

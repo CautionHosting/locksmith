@@ -30,3 +30,6 @@ zalloc = "0.1.0"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
+
+[features]
+unsafe-e2e = []
