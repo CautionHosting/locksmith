@@ -285,7 +285,7 @@ pub fn derive_public_certificate(
 
 fn generate_necroproof(bundle_hash: &[u8]) -> Result<Vec<u8>, DerivePublicCertificateError> {
     #[cfg(feature = "unsafe-e2e")]
-    if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+    if std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1") {
         tracing::warn!("UNSAFE E2E: returning a fake public-certificate proof");
         return Ok(bundle_hash.to_vec());
     }
@@ -303,12 +303,12 @@ mod tests {
         const CHILD: &str = "PUBLIC_CERT_HOOK_TEST_CHILD";
         if std::env::var_os(CHILD).is_some() {
             let enabled = cfg!(feature = "unsafe-e2e")
-                && std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some();
+                && std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1");
             let proof = generate_necroproof(&[3; 32]);
             assert_eq!(proof.as_ref().is_ok_and(|proof| proof == &[3; 32]), enabled);
             return;
         }
-        for enabled in [false, true] {
+        for flag in [None, Some(""), Some("0"), Some("1")] {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap());
             child
                 .args([
@@ -317,8 +317,8 @@ mod tests {
                 ])
                 .env(CHILD, "1")
                 .env_remove("CAUTION_UNSAFE_KEY_SERVICE_E2E");
-            if enabled {
-                child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", "1");
+            if let Some(flag) = flag {
+                child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", flag);
             }
             let output = child.output().unwrap();
             assert!(

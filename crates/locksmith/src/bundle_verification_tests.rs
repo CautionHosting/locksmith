@@ -80,7 +80,7 @@ fn expired_policy_is_reported_and_later_valid_policy_still_works() {
 
 #[test]
 fn user_data_and_signature_failures_remain_rejected() {
-    let (set, nonce, _, _) = fixture();
+    let (set, nonce, data, _) = fixture();
     let policy = KeymakerPcrPolicy { sets: vec![set] };
     let error = policy
         .verify_necroproof(PROOF, &nonce, b"wrong bundle hash")
@@ -91,11 +91,21 @@ fn user_data_and_signature_failures_remain_rejected() {
     );
     let mut tampered = PROOF.to_vec();
     *tampered.last_mut().unwrap() ^= 1;
-    assert!(
-        policy
-            .verify_necroproof(&tampered, &nonce, b"wrong bundle hash")
-            .is_err()
-    );
+    let error = policy
+        .verify_necroproof(&tampered, &nonce, &data)
+        .unwrap_err();
+    let VerifyNecroproofError::NoMatchingPcrSet { errors, .. } = error else {
+        panic!("wrong error")
+    };
+    assert!(matches!(
+        errors.as_slice(),
+        [(
+            0,
+            VerifyNecroproofError::RejectedByBootproof {
+                source: bootproof_sdk::format::Error::BadSignature,
+            }
+        )]
+    ));
     assert!(matches!(
         KeymakerPcrPolicy { sets: vec![] }.verify_necroproof(PROOF, &nonce, b""),
         Err(VerifyNecroproofError::NoPcrSets)

@@ -168,7 +168,7 @@ fn validate_request(request: &v1::GenerateQuorumRequest) -> Result<Vec<Cert>, Ge
 
 fn generate_entropy() -> Result<[u8; 32], GenerateQuorumError> {
     #[cfg(feature = "unsafe-e2e")]
-    if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+    if std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1") {
         warn!("UNSAFE E2E: using constant quorum entropy");
         return Ok([7u8; 32]);
     }
@@ -179,7 +179,7 @@ fn generate_entropy() -> Result<[u8; 32], GenerateQuorumError> {
 
 fn generate_necroproof(bundle_hash: &[u8], nonce: &[u8]) -> Result<Vec<u8>, GenerateQuorumError> {
     #[cfg(feature = "unsafe-e2e")]
-    if std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some() {
+    if std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1") {
         warn!("UNSAFE E2E: returning a fake Keymaker proof");
         return Ok(nonce.to_vec());
     }

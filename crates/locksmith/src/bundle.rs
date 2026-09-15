@@ -21,6 +21,7 @@ pub struct KeymakerPcrPolicy {
 pub struct KeymakerPcrSet {
     #[serde(deserialize_with = "deserialize_pcrs")]
     pub pcrs: HashMap<u8, Vec<u8>>,
+    #[serde(default, deserialize_with = "deserialize_expiry")]
     pub expires_at_unix_seconds: Option<u64>,
 }
 
@@ -29,7 +30,9 @@ impl KeymakerPcrSet {
         let Some(expires_at) = self.expires_at_unix_seconds else {
             return true;
         };
-        at < SystemTime::UNIX_EPOCH + Duration::from_secs(expires_at)
+        SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(expires_at))
+            .is_some_and(|expiry| at < expiry)
     }
 }
 
@@ -69,6 +72,23 @@ impl KeymakerPcrPolicy {
             errors,
         })
     }
+}
+
+fn deserialize_expiry<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let expiry = Option::<u64>::deserialize(deserializer)?;
+    if expiry.is_some_and(|seconds| {
+        SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(seconds))
+            .is_none()
+    }) {
+        return Err(serde::de::Error::custom(
+            "expires_at_unix_seconds is outside the supported SystemTime range",
+        ));
+    }
+    Ok(expiry)
 }
 
 fn deserialize_pcrs<'de, D>(deserializer: D) -> Result<HashMap<u8, Vec<u8>>, D::Error>
@@ -269,7 +289,10 @@ pub fn load_response(
         && policy.sets[0].expires_at_unix_seconds.is_none()
         && policy.sets[0].pcrs.len() == 3
         && (0..=2).all(|index| {
-            policy.sets[0].pcrs.get(&index).is_some_and(|pcr| pcr == &[0xab; 48])
+            policy.sets[0]
+                .pcrs
+                .get(&index)
+                .is_some_and(|pcr| pcr == &[0xab; 48])
         })
         && response.necroproof == nonce
     {
@@ -325,6 +348,27 @@ mod tests {
 
         assert_eq!(policy.sets[0].pcrs.get(&0), Some(&vec![0x0a]));
         assert!(policy.sets[0].is_valid_at(SystemTime::UNIX_EPOCH + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn policy_expiry_rejects_overflow_and_accepts_optional_values() {
+        for expiry in [None, Some(serde_json::Value::Null), Some(10.into())] {
+            let mut set = serde_json::json!({"pcrs": {"0": "0a"}});
+            if let Some(expiry) = expiry {
+                set["expires_at_unix_seconds"] = expiry;
+            }
+            let json = serde_json::json!({"sets": [set]}).to_string();
+            KeymakerPcrPolicy::from_json(&json).unwrap();
+        }
+        let json = serde_json::json!({"sets": [{
+            "pcrs": {"0": "0a"},
+            "expires_at_unix_seconds": u64::MAX
+        }]})
+        .to_string();
+        let error = KeymakerPcrPolicy::from_json(&json).unwrap_err();
+        let ParseKeymakerPcrPolicyError::ParseJson { source } = error;
+        assert!(source.to_string().contains("expires_at_unix_seconds"));
+        assert!(!pcr_set(1, Some(u64::MAX)).is_valid_at(SystemTime::UNIX_EPOCH));
     }
 
     #[test]

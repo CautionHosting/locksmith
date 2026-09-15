@@ -45,6 +45,9 @@ on the authenticated generation time, not the time the saved bundle is loaded:
 a proof generated before the cutoff can remain valid after certificate expiry.
 This follows [the timestamp policy in #7](https://codeberg.org/caution/locksmith/issues/7#issuecomment-19223141).
 
+Expiry values outside the host's supported `SystemTime` range are rejected when
+parsing the policy. Missing or null expiry values mean no cutoff.
+
 Tests use `tests/data/aws-test.cbor`, copied unchanged from Bootproof commit
 `53a93872c17c22a253e4ecb8ade00c5964762e45`,
 `crates/bootproof-sdk/src/format/data/aws-test.cbor`. This signed AWS fixture

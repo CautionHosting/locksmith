@@ -30,8 +30,10 @@ cargo build -p locksmith --locked --features unsafe-e2e
 ```
 
 Keymaker and public-cert-service use `CAUTION_UNSAFE_KEY_SERVICE_E2E=1` for fake
-proofs; Keymaker also uses constant entropy. Locksmithd accepts a hex-encoded
-test mnemonic secret through `LOCKSMITHD_UNSAFE_TEST_SECRET_HEX`, bypassing
+proofs; Keymaker also uses constant entropy. Only the exact value `1` enables
+these hooks; unset, empty, `0`, and other values leave them disabled.
+Locksmithd accepts a hex-encoded test mnemonic secret through
+`LOCKSMITHD_UNSAFE_TEST_SECRET_HEX`, bypassing
 quorum recovery. Each activated shortcut logs a warning without the secret.
 The Keymaker command disables its default `selfnuke` feature for host testing.
 Never use these feature builds (including `--all-features`) for production.

@@ -233,7 +233,7 @@ fn unsafe_hooks_require_feature_and_environment() {
     const CHILD: &str = "KEYMAKER_HOOK_TEST_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let enabled = cfg!(feature = "unsafe-e2e")
-            && std::env::var_os("CAUTION_UNSAFE_KEY_SERVICE_E2E").is_some();
+            && std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1");
         let entropy = std::panic::catch_unwind(generate_entropy);
         assert_eq!(
             matches!(entropy, Ok(Ok(value)) if value == [7; 32]),
@@ -276,7 +276,7 @@ fn unsafe_hooks_require_feature_and_environment() {
         }
         return;
     }
-    for enabled in [false, true] {
+    for flag in [None, Some(""), Some("0"), Some("1")] {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child
             .args([
@@ -287,8 +287,8 @@ fn unsafe_hooks_require_feature_and_environment() {
             .env_remove("CAUTION_UNSAFE_KEY_SERVICE_E2E")
             .env_remove("SHOOT_SELF_IN_FOOT")
             .env_remove("INSECURE_HARDWARE_ALLOWED");
-        if enabled {
-            child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", "1");
+        if let Some(flag) = flag {
+            child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", flag);
         }
         let output = child.output().unwrap();
         assert!(
