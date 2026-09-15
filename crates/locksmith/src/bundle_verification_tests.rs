@@ -1,7 +1,6 @@
 use super::*;
 
 const PROOF: &[u8] = include_bytes!("../tests/data/aws-test.cbor");
-const VERIFIED_AT: u64 = 1766510416;
 
 fn fixture() -> (KeymakerPcrSet, Vec<u8>, Vec<u8>, SystemTime) {
     let pcrs = HashMap::from([
@@ -14,16 +13,14 @@ fn fixture() -> (KeymakerPcrSet, Vec<u8>, Vec<u8>, SystemTime) {
             .unwrap();
     let document = Nitro::new(PROOF, pcrs.clone())
         .unwrap()
-        .verify(Duration::from_secs(VERIFIED_AT), &nonce)
+        .verify_at_attestation_time(Some(&nonce))
         .unwrap();
     let at = get_timestamp(&document).unwrap();
     let user_data = get_user_data(document).unwrap();
-    // Fix the existing policy-selected certificate instant for this fixture.
-    // This deliberately does not claim historical verification is fixed.
     (
         KeymakerPcrSet {
             pcrs,
-            expires_at_unix_seconds: Some(VERIFIED_AT + 1),
+            expires_at_unix_seconds: None,
         },
         nonce,
         user_data,
@@ -103,4 +100,47 @@ fn user_data_and_signature_failures_remain_rejected() {
         KeymakerPcrPolicy { sets: vec![] }.verify_necroproof(PROOF, &nonce, b""),
         Err(VerifyNecroproofError::NoPcrSets)
     ));
+}
+
+#[test]
+fn policy_cutoff_uses_generation_time_not_certificate_expiry_or_today() {
+    let (set, nonce, data, generated_at) = fixture();
+    let generated_seconds = generated_at
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // The fixture predates today and its certificate has expired. Acceptance
+    // depends only on the authenticated generation time and the selected policy.
+    for cutoff in [
+        None,
+        Some(generated_seconds + 1),
+        Some(generated_seconds + 86400),
+    ] {
+        let mut allowed = set.clone();
+        allowed.expires_at_unix_seconds = cutoff;
+        KeymakerPcrPolicy {
+            sets: vec![allowed],
+        }
+        .verify_necroproof(PROOF, &nonce, &data)
+        .unwrap();
+    }
+    for cutoff in [generated_seconds - 1, generated_seconds] {
+        let mut expired = set.clone();
+        expired.expires_at_unix_seconds = Some(cutoff);
+        assert!(
+            KeymakerPcrPolicy {
+                sets: vec![expired]
+            }
+            .verify_necroproof(PROOF, &nonce, &data)
+            .unwrap_err()
+            .to_string()
+            .contains("PCR policy expired")
+        );
+    }
+    let cutoff = SystemTime::UNIX_EPOCH + Duration::from_secs(generated_seconds);
+    let mut set = set;
+    set.expires_at_unix_seconds = Some(generated_seconds);
+    assert!(set.is_valid_at(cutoff - Duration::from_nanos(1)));
+    assert!(!set.is_valid_at(cutoff));
+    assert!(!set.is_valid_at(cutoff + Duration::from_nanos(1)));
 }

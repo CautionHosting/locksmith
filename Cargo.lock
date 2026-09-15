@@ -412,7 +412,7 @@ dependencies = [
 [[package]]
 name = "bootproof"
 version = "0.1.0"
-source = "git+https://codeberg.org/caution/bootproof.git?rev=b03721957e3850931f5b53627e7c3d1c302a06fe#b03721957e3850931f5b53627e7c3d1c302a06fe"
+source = "git+https://codeberg.org/caution/bootproof.git?rev=821b5c63e80f082f6d67ba3695c11416933489ec#821b5c63e80f082f6d67ba3695c11416933489ec"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "serde_bytes",
@@ -423,7 +423,7 @@ dependencies = [
 [[package]]
 name = "bootproof-sdk"
 version = "0.1.0"
-source = "git+https://codeberg.org/caution/bootproof.git?rev=b03721957e3850931f5b53627e7c3d1c302a06fe#b03721957e3850931f5b53627e7c3d1c302a06fe"
+source = "git+https://codeberg.org/caution/bootproof.git?rev=821b5c63e80f082f6d67ba3695c11416933489ec#821b5c63e80f082f6d67ba3695c11416933489ec"
 dependencies = [
  "coset",
  "ring",
@@ -2284,6 +2284,7 @@ dependencies = [
  "card-backend",
  "card-backend-pcsc",
  "cfg-if",
+ "coset",
  "daemonize",
  "dterror",
  "ed25519-dalek",

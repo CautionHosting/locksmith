@@ -8,7 +8,7 @@ publish.workspace = true
 [dependencies]
 anyhow = "1.0.102"
 axum = { version = "0.8.8", features = ["macros"] }
-bootproof = { git = "https://git.distrust.co/public/bootproof", version = "0.1.0" }
+bootproof = { git = "https://codeberg.org/caution/bootproof.git", rev = "821b5c63e80f082f6d67ba3695c11416933489ec", version = "0.1.0" }
 dterror = "0.1.0"
 keyfork-derive-openpgp = { version = "0.2.0", registry = "distrust", default-features = false }
 keyfork-derive-path-data = { version = "0.1.3", registry = "distrust" }

@@ -1,4 +1,4 @@
-use bootproof_sdk::format::{VerifiableSignedAttestationFormat as _, nitro::Nitro};
+use bootproof_sdk::format::nitro::Nitro;
 use keymaker_models::generate_quorum::{
     GenerateQuorumBundle, GenerateQuorumResponse, deterministic_bundle_hash,
     deterministic_necroproof_nonce,
@@ -31,13 +31,6 @@ impl KeymakerPcrSet {
         };
         at < SystemTime::UNIX_EPOCH + Duration::from_secs(expires_at)
     }
-
-    fn certificate_verification_time(&self) -> SystemTime {
-        self.expires_at_unix_seconds
-            .and_then(|expires_at| expires_at.checked_sub(1))
-            .map(|expires_at| SystemTime::UNIX_EPOCH + Duration::from_secs(expires_at))
-            .unwrap_or_else(SystemTime::now)
-    }
 }
 
 impl KeymakerPcrPolicy {
@@ -57,13 +50,8 @@ impl KeymakerPcrPolicy {
         }
         let mut errors = Vec::new();
         for (index, pcr_set) in self.sets.iter().enumerate() {
-            match verify_necroproof_with_pcrs(
-                necroproof,
-                &pcr_set.pcrs,
-                nonce,
-                expected_user_data,
-                pcr_set.certificate_verification_time(),
-            ) {
+            match verify_necroproof_with_pcrs(necroproof, &pcr_set.pcrs, nonce, expected_user_data)
+            {
                 Ok(at) if pcr_set.is_valid_at(at) => return Ok(()),
                 Ok(_) => errors.push((
                     index,
@@ -111,15 +99,11 @@ fn verify_necroproof_with_pcrs(
     pcrs: &HashMap<u8, Vec<u8>>,
     nonce: &[u8],
     expected_user_data: &[u8],
-    at: SystemTime,
 ) -> Result<SystemTime, VerifyNecroproofError> {
-    let at_since_epoch = at
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
     let attestation = Nitro::new(necroproof, pcrs.clone())
         .map_err(|source| VerifyNecroproofError::InvalidPcrs { source })?;
     let document = attestation
-        .verify(at_since_epoch, &nonce)
+        .verify_at_attestation_time(Some(&nonce))
         .map_err(|source| VerifyNecroproofError::RejectedByBootproof { source })?;
     let attestation_timestamp = get_timestamp(&document)?;
     let user_data = get_user_data(document)?;
