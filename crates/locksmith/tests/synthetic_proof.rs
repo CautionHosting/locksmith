@@ -20,7 +20,13 @@ fn synthetic_proof_gate() {
             if let Some(flag) = flag {
                 child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", flag);
             }
-            assert!(child.status().unwrap().success(), "flag {flag:?}");
+            let output = child.output().unwrap();
+            assert!(output.status.success(), "flag {flag:?}: {output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("test result: ok. 1 passed; 0 failed;"),
+                "{output:?}"
+            );
         }
         return;
     }

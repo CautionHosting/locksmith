@@ -10,13 +10,13 @@ use std::time::{Duration, SystemTime};
 
 pub type QuorumBundle = GenerateQuorumBundle;
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeymakerPcrPolicy {
     pub sets: Vec<KeymakerPcrSet>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeymakerPcrSet {
     #[serde(deserialize_with = "deserialize_pcrs")]
@@ -98,9 +98,13 @@ where
     let pcrs = HashMap::<u8, String>::deserialize(deserializer)?;
     pcrs.into_iter()
         .map(|(pcr_index, value)| {
-            smex::decode_to_vec(&value)
-                .map(|value| (pcr_index, value))
-                .map_err(serde::de::Error::custom)
+            let value = smex::decode_to_vec(&value).map_err(serde::de::Error::custom)?;
+            if value.len() != 48 {
+                return Err(serde::de::Error::custom(format!(
+                    "PCR {pcr_index} must contain exactly 48 bytes"
+                )));
+            }
+            Ok((pcr_index, value))
         })
         .collect()
 }
@@ -338,24 +342,28 @@ mod tests {
 
     #[test]
     fn policy_json_loads_sets_with_hex_pcrs() {
-        let policy = KeymakerPcrPolicy::from_json(
-            r#"{
-                "sets": [{
-                    "pcrs": {"0": "0a", "1": "0b", "2": "0c"},
-                    "expires_at_unix_seconds": null
-                }]
-            }"#,
-        )
-        .expect("policy");
-
-        assert_eq!(policy.sets[0].pcrs.get(&0), Some(&vec![0x0a]));
+        let policy = KeymakerPcrPolicy::from_json(&serde_json::json!({
+            "sets": [{"pcrs": {"0": "0a".repeat(48), "1": "0b".repeat(48), "2": "0c".repeat(48)},
+            "expires_at_unix_seconds": null}]
+        }).to_string()).expect("policy");
+        assert_eq!(policy.sets[0].pcrs.get(&0), Some(&vec![0x0a; 48]));
         assert!(policy.sets[0].is_valid_at(SystemTime::UNIX_EPOCH + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn policy_rejects_wrong_pcr_lengths() {
+        for length in [0, 1, 47, 49] {
+            let json = serde_json::json!({"sets":[{"pcrs":{"0":"ab".repeat(length)}}]}).to_string();
+            let error = KeymakerPcrPolicy::from_json(&json).unwrap_err();
+            let ParseKeymakerPcrPolicyError::ParseJson { source } = error;
+            assert!(source.to_string().contains("48 bytes"));
+        }
     }
 
     #[test]
     fn policy_expiry_rejects_overflow_and_accepts_optional_values() {
         for expiry in [None, Some(serde_json::Value::Null), Some(10.into())] {
-            let mut set = serde_json::json!({"pcrs": {"0": "0a"}});
+            let mut set = serde_json::json!({"pcrs": {"0": "0a".repeat(48)}});
             if let Some(expiry) = expiry {
                 set["expires_at_unix_seconds"] = expiry;
             }
@@ -363,7 +371,7 @@ mod tests {
             KeymakerPcrPolicy::from_json(&json).unwrap();
         }
         let json = serde_json::json!({"sets": [{
-            "pcrs": {"0": "0a"},
+            "pcrs": {"0": "0a".repeat(48)},
             "expires_at_unix_seconds": u64::MAX
         }]})
         .to_string();

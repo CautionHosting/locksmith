@@ -322,6 +322,12 @@ mod tests {
             }
             let output = child.output().unwrap();
             assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("test result: ok. 1 passed; 0 failed;"),
+                "child must execute exactly one test: {:?}",
+                output
+            );
+            assert!(
                 output.status.success(),
                 "{}\n{}",
                 String::from_utf8_lossy(&output.stdout),

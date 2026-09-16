@@ -7,9 +7,11 @@ use blahaj::{Share, Sharks};
 use bootproof::format::{Format, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
+use sequoia_openpgp::{Cert, Fingerprint, parse::Parse};
 use sha2::Sha256;
-use std::fmt::Write;
+use std::collections::HashSet;
 use std::panic::Location;
+use std::sync::Arc;
 use std::time::SystemTime;
 use structstruck::strike;
 use tracing::{debug, error};
@@ -18,12 +20,13 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 #[derive(Debug, Clone)]
 struct Payload {
     request: models::SendShardRequest,
+    holder: usize,
     request_stub: RequestStub,
 }
 
 #[derive(Debug, Clone)]
 struct ReconstitutionStatus {
-    remaining: u8,
+    response: models::SendSignedEncryptedShardResponse,
     request_stub: RequestStub,
 }
 
@@ -51,6 +54,9 @@ strike! {
             AddShard,
             SyncShardReconstitutionStatus,
             BundleAccess,
+            InvalidQuorum,
+            RecoveredKeyMismatch,
+            DeriveRecoveredKey,
         },
         location: &'static Location<'static>,
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -109,7 +115,7 @@ impl RequestStub {
 #[tracing::instrument(skip_all)]
 async fn server(
     address: std::net::SocketAddr,
-    bundle: QuorumBundle,
+    keyrings: Arc<Vec<String>>,
     tx: tokio::sync::mpsc::Sender<Payload>,
     broadcast_tx: tokio::sync::broadcast::Sender<ReconstitutionStatus>,
 ) -> Result<(), ReceiveShardsError> {
@@ -147,7 +153,7 @@ async fn server(
 
         tokio::spawn(handle_client(
             client,
-            bundle.clone(),
+            keyrings.clone(),
             tx.clone(),
             broadcast_tx.subscribe(),
             RequestStub::new(),
@@ -159,7 +165,7 @@ async fn server(
 #[tracing::instrument(skip_all, fields(%request_stub))]
 async fn handle_client(
     mut client: tokio::net::TcpStream,
-    bundle: QuorumBundle,
+    keyrings: Arc<Vec<String>>,
     tx: tokio::sync::mpsc::Sender<Payload>,
     mut broadcast_rx: tokio::sync::broadcast::Receiver<ReconstitutionStatus>,
     request_stub: RequestStub,
@@ -191,58 +197,23 @@ async fn handle_client(
     .with_contexts((), ErrorKind::ReceiveRequest)?;
 
     debug!("verifying signed request from user");
-    let bundle = bundle.to_latest();
-    let keyring = crate::openpgp::reconstruct_keyring(&bundle.keyring)
-        .with_contexts((), ErrorKind::BundleAccess)?;
-    let signed_request = match crate::openpgp::verify_detached(
-        &keyring,
-        &request.signed_payload,
-        &request.signature,
-    ) {
-        Ok(()) => {
-            debug!("accepting signature from user");
-            let decoded: models::SendEncryptedShardRequest =
-                serde_json::from_str(&request.signed_payload)
-                    .with_contexts((), ErrorKind::DeserializeSignedPayload)?;
-            decoded
-        }
-        Err(source) => {
-            error!("denying signature from user");
-            let mut error_messages = vec![];
-            if let crate::openpgp::VerifyErrorKind::AllSignaturesInvalid { validation_errors } =
-                &source.kind
-            {
-                for error in validation_errors {
-                    let mut indentation = 0;
-                    error_messages.push(format!("- {error}"));
-                    let mut source = error.source();
-                    while let Some(new_source) = source {
-                        indentation += 1;
-                        let mut prefix = "  ".repeat(indentation);
-                        write!(prefix, "- {new_source}").expect("can concat error");
-                        error_messages.push(prefix + new_source.to_string().as_str());
-                        source = new_source.source();
-                    }
-                }
-            };
-
-            error_messages.insert(0, "No matching certificate found for signature:".into());
-
+    let holder = match authenticate_holder(&keyrings, &request.signed_payload, &request.signature) {
+        Ok(holder) => holder,
+        Err(error) => {
             crate::send(
                 &mut client,
                 models::SendSignedEncryptedShardResponse::Rejected {
-                    reason: error_messages.join("\n"),
+                    reason: "Signature must identify exactly one bundle holder".into(),
                 },
             )
             .await
             .with_contexts((), ErrorKind::FailedSendRejection)?;
-            return Err(ReceiveShardsError {
-                kind: ReceiveShardsErrorKind::InvalidSignature,
-                location: Location::caller(),
-                source: Some(source.into()),
-            });
+            return Err(error);
         }
     };
+    let signed_request: models::SendEncryptedShardRequest =
+        serde_json::from_str(&request.signed_payload)
+            .with_contexts((), ErrorKind::DeserializeSignedPayload)?;
 
     // TODO: If any of the following fails, the client will not be notified.
     // Ideally we should move this into its own function and do a similar matching pattern as to
@@ -272,40 +243,141 @@ async fn handle_client(
         .decrypt(nonce, decoded_encrypted_payload.as_slice())
         .with_contexts((), ErrorKind::DecryptPayload)?;
 
-    let decoded_payload: models::SendShardRequest = serde_json::from_slice(&decrypted_payload)
-        .with_contexts((), ErrorKind::JsonDecodePayload)?;
+    let decoded_payload: models::SendShardRequest = match serde_json::from_slice(&decrypted_payload)
+    {
+        Ok(request) => request,
+        Err(source) => {
+            crate::send(
+                &mut client,
+                models::SendSignedEncryptedShardResponse::Rejected {
+                    reason: "Malformed share request".into(),
+                },
+            )
+            .await
+            .with_contexts((), ErrorKind::FailedSendRejection)?;
+            return Err(ReceiveShardsError {
+                kind: ErrorKind::JsonDecodePayload,
+                source: Some(Box::new(source)),
+                location: Location::caller(),
+            });
+        }
+    };
 
     tx.send(Payload {
         request: decoded_payload,
+        holder,
         request_stub,
     })
     .await
     .with_contexts((), ErrorKind::AddShard)?;
 
-    // TODO: Provide a broadcast channel for the shard receiver to send back the status of how many
-    // remain. It also means we can remove the AtomicU8, since the receiver can broadcast a
-    // combination of { request: RequestStub, remaining: u8 }
-
-    let remaining = loop {
+    let response = loop {
         let status = broadcast_rx
             .recv()
             .await
             .with_contexts((), ErrorKind::SyncShardReconstitutionStatus)?;
-        debug!(?status, "received status");
         if status.request_stub == request_stub {
-            break status.remaining;
+            break status.response;
         }
     };
-
-    debug!(remaining, "sending response to user");
-    crate::send(
-        &mut client,
-        models::SendSignedEncryptedShardResponse::Accepted { remaining },
-    )
-    .await
-    .with_contexts((), ErrorKind::SendResponse)?;
-
+    crate::send(&mut client, response)
+        .await
+        .with_contexts((), ErrorKind::SendResponse)?;
     Ok(())
+}
+
+// Authenticate against each proof-bound holder entry, never against a claimed issuer ID.
+fn authenticate_holder(
+    keyrings: &[String],
+    data: &str,
+    signature: &str,
+) -> Result<usize, ReceiveShardsError> {
+    let mut matches = keyrings.iter().enumerate().filter_map(|(index, keyring)| {
+        crate::openpgp::verify_detached(keyring, data, signature)
+            .is_ok()
+            .then_some(index)
+    });
+    match (matches.next(), matches.next()) {
+        (Some(holder), None) => Ok(holder),
+        _ => Err(recovery_error(ReceiveShardsErrorKind::InvalidSignature)),
+    }
+}
+
+#[track_caller]
+fn recovery_error(kind: ReceiveShardsErrorKind) -> ReceiveShardsError {
+    ReceiveShardsError {
+        kind,
+        source: None,
+        location: Location::caller(),
+    }
+}
+
+struct Recovery {
+    threshold: u8,
+    keyrings: Arc<Vec<String>>,
+    public_key: Fingerprint,
+}
+
+impl Recovery {
+    fn new(bundle: &QuorumBundle) -> Result<Self, ReceiveShardsError> {
+        let bundle = bundle.clone().to_latest();
+        if bundle.threshold == 0
+            || bundle.threshold > bundle.max
+            || bundle.max > 254
+            || usize::from(bundle.max) != bundle.keyring.len()
+        {
+            return Err(recovery_error(ReceiveShardsErrorKind::InvalidQuorum));
+        }
+        let keyrings = bundle
+            .keyring
+            .iter()
+            .map(|key| {
+                crate::openpgp::reconstruct_keyring(std::slice::from_ref(key))
+                    .with_contexts((), ReceiveShardsErrorKind::BundleAccess)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let public_key = Cert::from_bytes(&bundle.public_key)
+            .map_err(|source| ReceiveShardsError {
+                kind: ReceiveShardsErrorKind::BundleAccess,
+                source: Some(source.into()),
+                location: Location::caller(),
+            })?
+            .fingerprint();
+        Ok(Self {
+            threshold: bundle.threshold,
+            keyrings: Arc::new(keyrings),
+            public_key,
+        })
+    }
+}
+
+// Same deterministic primary key derivation as Keymaker; certificate signatures and
+// expiration timestamps are deliberately excluded from the comparison.
+fn recovered_fingerprint(secret: &[u8]) -> Result<Fingerprint, ReceiveShardsError> {
+    use keyfork_derive_openpgp::{XPrv, derive_util::DerivationIndex};
+    use sequoia_openpgp::{packet::UserID, types::KeyFlags};
+    let entropy: [u8; 32] = secret
+        .try_into()
+        .map_err(|_| recovery_error(ReceiveShardsErrorKind::RecoverShards))?;
+    let seed = keyfork_mnemonic::Mnemonic::from_array(entropy).generate_seed(None);
+    let path = keyfork_derive_path_data::paths::OPENPGP
+        .clone()
+        .chain_push(DerivationIndex::new(0, true).expect("account 0 is valid"));
+    let key = XPrv::new(seed)
+        .expect("fixed length seed is valid")
+        .derive_path(&path)
+        .with_contexts((), ReceiveShardsErrorKind::DeriveRecoveredKey)?;
+    let cert = keyfork_derive_openpgp::derive(
+        &key,
+        &[KeyFlags::empty().set_certification()],
+        &UserID::from("Keymaker-generated key"),
+    )
+    .map_err(|source| ReceiveShardsError {
+        kind: ReceiveShardsErrorKind::DeriveRecoveredKey,
+        source: Some(source.into()),
+        location: Location::caller(),
+    })?;
+    Ok(cert.fingerprint())
 }
 
 // TODO: Make its own error type.
@@ -313,52 +385,85 @@ async fn handle_client(
 async fn reconstitute_shards(
     mut rx: tokio::sync::mpsc::Receiver<Payload>,
     broadcast_tx: tokio::sync::broadcast::Sender<ReconstitutionStatus>,
+    recovery: &Recovery,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
-    use ReceiveShardsErrorKind as ErrorKind;
-
-    let mut shards = vec![];
-    let mut threshold = 1u8;
-    while shards.len() < usize::from(threshold) {
-        debug!("awaiting new shard");
-        let shard;
-        let request_stub;
-        Payload {
-            request: models::SendShardRequest { shard, threshold },
+    use models::SendSignedEncryptedShardResponse::{Accepted, Rejected};
+    let mut shares = vec![];
+    let mut holders = HashSet::new();
+    let mut coordinates = HashSet::new();
+    loop {
+        let Payload {
+            request,
+            holder,
             request_stub,
-        } = rx.recv().await.ok_or(ReceiveShardsError {
-            kind: ErrorKind::NoMoreShards,
-            location: Location::caller(),
-            source: None,
-        })?;
-        shards.push(shard);
+        } = rx
+            .recv()
+            .await
+            .ok_or_else(|| recovery_error(ReceiveShardsErrorKind::NoMoreShards))?;
+        let reason = if request.threshold != recovery.threshold {
+            Some("Threshold does not match the verified bundle")
+        } else if holder >= recovery.keyrings.len() {
+            Some("Unknown holder")
+        } else if request.shard.len() != 33 || request.shard[0] == 0 {
+            Some("Malformed share: expected a nonzero coordinate and 32 bytes")
+        } else if holders.contains(&holder) {
+            Some("Holder already contributed a share")
+        } else if coordinates.contains(&request.shard[0]) {
+            Some("Share coordinate already contributed")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            broadcast_tx
+                .send(ReconstitutionStatus {
+                    request_stub,
+                    response: Rejected {
+                        reason: reason.into(),
+                    },
+                })
+                .with_contexts((), ReceiveShardsErrorKind::SyncShardReconstitutionStatus)?;
+            continue;
+        }
+        let share = Share::try_from(request.shard.as_slice())
+            .map_err(|_| recovery_error(ReceiveShardsErrorKind::InvalidShare))?;
+        holders.insert(holder);
+        coordinates.insert(request.shard[0]);
+        shares.push(share);
+        let remaining =
+            recovery.threshold - u8::try_from(shares.len()).expect("bounded by threshold");
+        let result = if remaining == 0 {
+            Some(
+                Sharks(recovery.threshold)
+                    .recover(&shares)
+                    .map_err(|_| recovery_error(ReceiveShardsErrorKind::RecoverShards))
+                    .and_then(|secret| {
+                        if recovered_fingerprint(&secret)? != recovery.public_key {
+                            return Err(recovery_error(
+                                ReceiveShardsErrorKind::RecoveredKeyMismatch,
+                            ));
+                        }
+                        Ok(secret)
+                    }),
+            )
+        } else {
+            None
+        };
+        let response = match &result {
+            Some(Err(_)) => Rejected {
+                reason: "Recovered secret does not match the bundle public key".into(),
+            },
+            _ => Accepted { remaining },
+        };
         broadcast_tx
             .send(ReconstitutionStatus {
-                remaining: threshold.saturating_sub(
-                    u8::try_from(shards.len()).expect("shards.len() is always < u8 threshold"),
-                ),
                 request_stub,
+                response,
             })
-            .with_contexts((), ErrorKind::SyncShardReconstitutionStatus)?;
+            .with_contexts((), ReceiveShardsErrorKind::SyncShardReconstitutionStatus)?;
+        if let Some(result) = result {
+            return result;
+        }
     }
-
-    let shares = shards
-        .into_iter()
-        .map(|shard| Share::try_from(&*shard))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_source| ReceiveShardsError {
-            kind: ErrorKind::InvalidShare,
-            location: Location::caller(),
-            source: None,
-        })?;
-
-    let sharks = Sharks(threshold);
-    sharks
-        .recover(&shares)
-        .map_err(|_source| ReceiveShardsError {
-            kind: ErrorKind::RecoverShards,
-            location: Location::caller(),
-            source: None,
-        })
 }
 
 #[tracing::instrument(skip_all)]
@@ -366,22 +471,24 @@ pub async fn receive_shards(
     address: std::net::SocketAddr,
     bundle: &QuorumBundle,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
-    // Payloads are: shard || threshold
+    // The caller supplies a bundle loaded through proof verification.
+    let recovery = Recovery::new(bundle)?;
     let (tx, rx) = tokio::sync::mpsc::channel::<Payload>(255);
-    let (reconstitution_tx, reconstitution_rx) =
+    let (reconstitution_tx, _reconstitution_rx) =
         tokio::sync::broadcast::channel::<ReconstitutionStatus>(255);
-
     let server_handle = tokio::spawn(server(
         address,
-        bundle.clone(),
+        recovery.keyrings.clone(),
         tx,
         reconstitution_tx.clone(),
     ));
-    let data = reconstitute_shards(rx, reconstitution_tx).await?;
-
-    // once we have enough shards, we should no longer accept new clients.
+    let data = reconstitute_shards(rx, reconstitution_tx, &recovery).await;
+    // Stop accepting clients on both success and failure.
     server_handle.abort();
-    drop(reconstitution_rx);
-
-    Ok(data)
+    let _ = server_handle.await;
+    data
 }
+
+#[cfg(test)]
+#[path = "server_tests.rs"]
+mod tests;

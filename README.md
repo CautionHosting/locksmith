@@ -9,7 +9,8 @@ storage-encryption keys. Duplicate primary certificates and encryption keys
 shared between holders are rejected, including reused encryption material with
 different creation timestamps. Expired or revoked certificates are rejected.
 Invalid requests return HTTP 400 before
-entropy generation; Keymaker's existing one-shot reboot lifecycle is unchanged.
+entropy generation or consumption of the reboot permit. Valid requests retain
+Keymaker's existing one-shot reboot lifecycle, including reboot after a generation failure.
 
 The proof-bound V1 response requires `threshold` and `max`, populated from the
 same values passed to shard generation. Callers must compare them with their
@@ -75,6 +76,8 @@ The default workspace check requires Linux for Keymaker's `selfnuke` reboot
 code. On macOS, check the workspace with `--exclude keymaker`, then run
 `cargo check -p keymaker --all-targets --locked --no-default-features`.
 
-Unsafe-hook tests use subprocesses to isolate environment variables. Local
+Unsafe-hook tests use subprocesses to isolate environment variables and assert
+that exactly one child test passed, so a renamed test cannot silently skip a gate.
+Local
 mixed-generation tests use fake proofs and do not establish Nitro readiness.
 See [Locksmith usage and verification limits](crates/locksmith/README.md).

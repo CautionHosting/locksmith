@@ -1,10 +1,20 @@
 # PGP shard submission
 
-The client and receiver reconstruct the bundle's OpenPGP certificates into one
-in-memory public-key armor block for signing and signature verification. Every
-holder's certificate is retained in order, including multiple certificates in a
-legacy combined entry. Empty or malformed entries fail; WebAuthn entries return
-an unsupported error because their shard transport is not implemented.
+The client reconstructs the bundle's OpenPGP certificates into one in-memory
+public-key armor block for signing. Before listening, the receiver prepares each
+holder entry separately and reads the threshold from the verified bundle.
+Empty or malformed entries fail at startup; WebAuthn/mixed bundles report an
+unsupported error because their shard transport is not implemented.
+
+A signature must identify exactly one bundle holder. Recovery counts each holder
+and share coordinate once, rejects conflicting client thresholds and malformed
+shares, and leaves the remaining count unchanged on rejection. The existing
+`Accepted`/`Rejected` wire responses are unchanged. After the required distinct
+contributions arrive, the recovered entropy must derive the same OpenPGP primary
+key fingerprint as the proof-bound bundle before any seed is served. A mismatch
+terminates recovery; the listener stops on both success and failure. This check
+detects incorrect recovery but does not identify which holder supplied bad data
+or prevent an authorized holder from denying recovery.
 
 Reconstruction does not change the stored bundle, certificate strings, hash or
 proof envelope.
@@ -46,7 +56,8 @@ a proof generated before the cutoff can remain valid after certificate expiry.
 This follows [the timestamp policy in #7](https://codeberg.org/caution/locksmith/issues/7#issuecomment-19223141).
 
 Expiry values outside the host's supported `SystemTime` range are rejected when
-parsing the policy. Missing or null expiry values mean no cutoff.
+parsing the policy. Every PCR value must decode to exactly 48 bytes; truncated
+values fail with a policy diagnostic. Missing or null expiry values mean no cutoff.
 
 Tests use `tests/data/aws-test.cbor`, copied unchanged from Bootproof commit
 `53a93872c17c22a253e4ecb8ade00c5964762e45`,

@@ -202,9 +202,12 @@ pub async fn generate_quorum(
     State(app_state): State<Arc<AppState>>,
     Json(request): Json<GenerateQuorumRequest>,
 ) -> Result<Json<GenerateQuorumResponse>, GenerateQuorumError> {
+    use GenerateQuorumErrorKind as ErrorKind;
+    let request = request.to_latest();
+    let certs = validate_request(&request)?;
     #[cfg(feature = "selfnuke")]
     tokio::task::spawn({
-        // NOTE: The system should be terminated after this route has been called, regardless of
+        // NOTE: The system should be terminated after a valid request has been accepted, regardless of
         // whether it was successful or not. We set a deadline of 10 seconds to complete the
         // operation and send the response to the client before rebooting. No one else will be able
         // to obtain a reboot permit, as we purposefully forget the permit without releasing it.
@@ -221,9 +224,6 @@ pub async fn generate_quorum(
         }
     });
 
-    use GenerateQuorumErrorKind as ErrorKind;
-    let request = request.to_latest();
-    let certs = validate_request(&request)?;
     let v1::GenerateQuorumRequest {
         bundle_id,
         label,

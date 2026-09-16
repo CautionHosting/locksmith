@@ -212,20 +212,22 @@ fn recognizes_caution_critical_notations() {
     assert!(validate_request(&request(vec![entry(&cert)])).is_ok());
 }
 
-#[cfg(not(feature = "selfnuke"))]
 #[tokio::test]
 async fn invalid_handler_request_returns_400_without_entropy() {
     use axum::response::IntoResponse;
-    let r = request(vec![v1::Key::OpenPGP {
+    let malformed = request(vec![v1::Key::OpenPGP {
         cert: "malformed".into(),
     }]);
-    let error = generate_quorum(
-        State(Arc::new(AppState::new())),
-        Json(GenerateQuorumRequest::V1(r)),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    let mut zero_threshold = malformed.clone();
+    zero_threshold.threshold = 0;
+    for r in [malformed, zero_threshold] {
+        let state = Arc::new(AppState::new());
+        let error = generate_quorum(State(state.clone()), Json(GenerateQuorumRequest::V1(r)))
+            .await
+            .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        assert_eq!(state.reboot_permit.available_permits(), 1);
+    }
 }
 
 #[test]
@@ -339,6 +341,12 @@ fn unsafe_hooks_require_feature_and_environment() {
             child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", flag);
         }
         let output = child.output().unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("test result: ok. 1 passed; 0 failed;"),
+            "child must execute exactly one test: {:?}",
+            output
+        );
         assert!(
             output.status.success(),
             "{}\n{}",
