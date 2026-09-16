@@ -212,6 +212,8 @@ fn malformed_and_unsupported_entries_fail_without_partial_keyring() {
 fn reconstruction_preserves_proofed_bundle_and_hash() {
     let envelope = Proofed {
         data: GenerateQuorumBundle::V1(v1::GenerateQuorumResponse {
+            threshold: 2,
+            max: 2,
             bundle_id: [7; 16],
             label: Default::default(),
             keyring: vec![entry(&holder()), entry(&holder())],

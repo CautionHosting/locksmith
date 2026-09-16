@@ -299,6 +299,8 @@ pub async fn generate_quorum(
         .expect("should always get valid utf8 from armor");
 
     let data = GenerateQuorumBundle::V1(v1::GenerateQuorumResponse {
+        threshold,
+        max,
         bundle_id,
         label,
         keyring,

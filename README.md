@@ -11,6 +11,21 @@ different creation timestamps. Expired or revoked certificates are rejected.
 Invalid requests return HTTP 400 before
 entropy generation; Keymaker's existing one-shot reboot lifecycle is unchanged.
 
+The proof-bound V1 response requires `threshold` and `max`, populated from the
+same values passed to shard generation. Callers must compare them with their
+original request after verifying the proof. The proof authenticates those
+parameters under the measured Keymaker implementation; it is not an independent
+proof of correct secret sharing.
+
+This intentionally breaks the previous V1 response contract without changing its
+version tag. Updated readers reject bundles missing either field, including old
+stored bundles used for recovery. Older readers reject the new fields. Do not
+add fields to an existing bundle: that invalidates its proof. Upgrade Keymaker,
+shared models, clients and Locksmith runtimes together, rebuild the enclave and
+independently establish its new trusted PCR policy. Existing encrypted material
+is not migrated by this change; local synthetic tests do not establish Nitro
+readiness.
+
 Both OpenPGP and WebAuthn entries are accepted and retained in their original
 order. Caution's organization/bundle critical notation names are recognized;
 this capability check does not verify the Caution CA or authorize WebAuthn

@@ -152,6 +152,12 @@ pub mod generate_quorum {
             /// The provided public keys.
             pub keyring: Vec<Key>,
 
+            /// The threshold used to generate the encrypted shares.
+            pub threshold: u8,
+
+            /// The number of shares generated, equal to the holder count.
+            pub max: u8,
+
             /// The v1 Shardfile.
             pub shardfile: String,
 
@@ -171,6 +177,8 @@ mod tests {
 
     fn sample_bundle(label: impl Into<HashMap<String, String>>) -> GenerateQuorumBundle {
         GenerateQuorumBundle::V1(v1::GenerateQuorumResponse {
+            threshold: 1,
+            max: 1,
             bundle_id: [7; 16],
             label: label.into(),
             keyring: vec![v1::Key::OpenPGP {
@@ -189,6 +197,8 @@ mod tests {
         {
           "data": {
             "version": "V1",
+            "threshold": 1,
+            "max": 1,
             "bundle_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             "label": {"name": "demo"},
             "keyring": [{"OpenPGP": {"cert": "cert"}}],
@@ -276,5 +286,24 @@ mod tests {
             deterministic_bundle_hash(&data).expect("hash original"),
             deterministic_bundle_hash(&different_data).expect("hash changed")
         );
+    }
+
+    #[test]
+    fn quorum_parameters_are_required_and_hash_bound() {
+        let original = sample_bundle(HashMap::new());
+        let hash = deterministic_bundle_hash(&original).unwrap();
+        for field in ["threshold", "max"] {
+            let value = serde_json::to_value(&original).unwrap();
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<GenerateQuorumBundle>(missing).is_err());
+            let mut null = value.clone();
+            null[field] = serde_json::Value::Null;
+            assert!(serde_json::from_value::<GenerateQuorumBundle>(null).is_err());
+            let mut changed = value;
+            changed[field] = 2.into();
+            let changed = serde_json::from_value(changed).unwrap();
+            assert_ne!(hash, deterministic_bundle_hash(&changed).unwrap());
+        }
     }
 }

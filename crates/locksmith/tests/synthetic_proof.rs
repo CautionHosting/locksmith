@@ -25,7 +25,7 @@ fn synthetic_proof_gate() {
         return;
     }
     let mut response: GenerateQuorumResponse = serde_json::from_value(json!({
-        "data": {"version":"V1", "bundle_id":vec![1;16], "label":{}, "keyring":[], "public_key":"test", "shardfile":"test"},
+        "data": {"version":"V1", "threshold":1, "max":1, "bundle_id":vec![1;16], "label":{}, "keyring":[], "public_key":"test", "shardfile":"test"},
         "necroproof":[]
     })).unwrap();
     let hash = deterministic_bundle_hash(&response.data).unwrap();
@@ -43,18 +43,25 @@ fn synthetic_proof_gate() {
     let mut wrong = response.clone();
     wrong.necroproof[0] ^= 1;
     assert!(load_response(wrong, &policy).is_err());
-    let mut data = serde_json::to_value(&response.data).unwrap();
-    data["public_key"] = json!("altered");
-    assert!(
-        load_response(
-            Proofed {
-                data: serde_json::from_value(data).unwrap(),
-                necroproof: response.necroproof.clone()
-            },
-            &policy
-        )
-        .is_err()
-    );
+    for (field, value) in [
+        ("public_key", json!("altered")),
+        ("threshold", json!(2)),
+        ("max", json!(2)),
+    ] {
+        let mut data = serde_json::to_value(&response.data).unwrap();
+        data[field] = value;
+        assert!(
+            load_response(
+                Proofed {
+                    data: serde_json::from_value(data).unwrap(),
+                    necroproof: response.necroproof.clone(),
+                },
+                &policy
+            )
+            .is_err(),
+            "tampered {field}"
+        );
+    }
     for case in 0..5 {
         let mut wrong = policy.clone();
         match case {

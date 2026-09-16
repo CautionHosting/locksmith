@@ -31,6 +31,8 @@ zalloc = "0.1.0"
 nix = { version = "0.31.2", default-features = false, features = ["reboot"], optional = true }
 
 [dev-dependencies]
+blahaj = "0.6.0"
+keyfork-prompt = { version = "0.2.5", registry = "distrust" }
 reqwest = "0.13.2"
 
 [features]

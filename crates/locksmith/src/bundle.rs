@@ -316,6 +316,8 @@ mod tests {
         serde_json::json!({
             "data": {
                 "version": "V1",
+                "threshold": 2,
+                "max": 2,
                 "bundle_id": [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],
                 "label": {"name": "demo"},
                 "keyring": [{"OpenPGP": {"cert": "cert-a"}}, {"OpenPGP": {"cert": "cert-b"}}],

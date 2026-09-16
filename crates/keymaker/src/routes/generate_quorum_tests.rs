@@ -263,6 +263,7 @@ fn unsafe_hooks_require_feature_and_environment() {
                 ))
                 .unwrap();
             let bundle = response.data.to_latest();
+            assert_eq!((bundle.threshold, bundle.max), (r.threshold, r.max));
             assert_eq!(bundle.bundle_id, r.bundle_id);
             assert_eq!(bundle.label, r.label);
             assert_eq!(bundle.keyring, r.keyring);
@@ -273,6 +274,53 @@ fn unsafe_hooks_require_feature_and_environment() {
                     .is_empty()
             );
             assert!(Cert::from_bytes(&bundle.public_key).is_ok());
+
+            // Exercise the handler and real encrypted shares; only the Nitro proof is synthetic.
+            let holders: Vec<_> = (0..5).map(|_| holder(true, true, true)).collect();
+            let mut r = request(holders.iter().map(entry).collect());
+            r.threshold = 3;
+            let Json(response) = runtime
+                .block_on(generate_quorum(
+                    State(Arc::new(AppState::new())),
+                    Json(GenerateQuorumRequest::V1(r)),
+                ))
+                .unwrap();
+            let bundle = response.data.to_latest();
+            assert_eq!((bundle.threshold, bundle.max), (3, 5));
+            let encrypted = OpenPGP
+                .parse_shard_file(bundle.shardfile.as_bytes())
+                .unwrap();
+            let shares: Vec<_> = holders
+                .into_iter()
+                .map(|holder| {
+                    let (share, threshold) = OpenPGP
+                        .decrypt_one_shard(
+                            Some(vec![holder]),
+                            &encrypted,
+                            std::rc::Rc::new(std::sync::Mutex::new(Box::new(
+                                keyfork_prompt::Headless::new(),
+                            ))),
+                        )
+                        .unwrap();
+                    assert_eq!(threshold, bundle.threshold);
+                    share
+                })
+                .collect();
+            let sharks = blahaj::Sharks(bundle.threshold);
+            // Every pair fails and every triple recovers the test generator's entropy.
+            for a in 0..5 {
+                for b in a + 1..5 {
+                    assert!(sharks.recover([&shares[a], &shares[b]]).is_err());
+                    for c in b + 1..5 {
+                        assert_eq!(
+                            sharks
+                                .recover([&shares[a], &shares[b], &shares[c]])
+                                .unwrap(),
+                            [7; 32]
+                        );
+                    }
+                }
+            }
         }
         return;
     }
