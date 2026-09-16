@@ -11,6 +11,21 @@ COPY --from=user-pcsc-lite . /
 
 COPY . /locksmith
 WORKDIR /locksmith
+RUN <<-'EOF'
+	set -eu
+	for input in .caution/quorum-bundle.json .caution/keymaker-pcr-policy.json; do
+		test -s "$input" || { echo "Missing required deployment input: $input" >&2; exit 1; }
+	done
+	mkdir -p /rootfs/etc/caution/secrets
+	cp .caution/quorum-bundle.json /rootfs/etc/caution/bundle.json
+	cp .caution/keymaker-pcr-policy.json /rootfs/etc/caution/keymaker-pcr-policy.json
+	for secret in .caution/secrets/*.asc; do
+		[ -f "$secret" ] || continue
+		cp "$secret" /rootfs/etc/caution/secrets/
+	done
+	find /rootfs/etc -type d -exec chmod 0755 {} +
+	find /rootfs/etc -type f -exec chmod 0644 {} +
+EOF
 RUN --mount=type=cache,target=/root/.cargo cargo fetch
 ENV RUSTFLAGS="-C codegen-units=1 -C target-feature=+crt-static"
 # LOAD BEARING
@@ -20,6 +35,7 @@ RUN --network=none \
 	--mount=type=cache,target=/root/.cargo \
 	--mount=type=cache,target=/locksmith/target \
 	<<-EOF
+	set -eu
 	ARCH="$(uname -m)"
 	cargo build \
 		--frozen \
@@ -40,8 +56,6 @@ EOF
 FROM stagex/core-filesystem@sha256:da28831927652291b0fa573092fd41c8c96ca181ea224df7bff40e1833c3db13 AS package
 COPY --from=build /rootfs/ /
 COPY --from=core-busybox . /
-ADD bundle-single.json /etc/caution/bundle.json
-ADD secrets /etc/caution/secrets
 # TODO: where put keyforkd?
 ADD <<EOF /etc/environment
 RUST_LOG=debug

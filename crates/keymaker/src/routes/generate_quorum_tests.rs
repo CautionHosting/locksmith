@@ -187,6 +187,118 @@ fn preserves_pgp_and_webauthn_order() {
     assert_eq!(serde_json::to_vec(&r).unwrap(), before);
 }
 
+fn shared_signing_key_request(change_timestamp: bool, webauthn: bool) -> v1::GenerateQuorumRequest {
+    use openpgp::packet::signature::SignatureBuilder;
+    use openpgp::types::SignatureType;
+    let first = holder(true, true, true);
+    let second = holder(false, true, true);
+    let policy = openpgp::policy::StandardPolicy::new();
+    let mut subkey = first
+        .keys()
+        .with_policy(&policy, None)
+        .for_signing()
+        .secret()
+        .next()
+        .unwrap()
+        .key()
+        .clone();
+    if change_timestamp {
+        subkey
+            .set_creation_time(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+    }
+    let mut subkey_signer = subkey.clone().into_keypair().unwrap();
+    let subkey = subkey.parts_into_public().role_into_subordinate();
+    let backsig = SignatureBuilder::new(SignatureType::PrimaryKeyBinding)
+        .sign_primary_key_binding(&mut subkey_signer, second.primary_key().key(), &subkey)
+        .unwrap();
+    let mut primary = second
+        .primary_key()
+        .key()
+        .clone()
+        .parts_into_secret()
+        .unwrap()
+        .into_keypair()
+        .unwrap();
+    let binding = subkey
+        .bind(
+            &mut primary,
+            &second,
+            SignatureBuilder::new(SignatureType::SubkeyBinding)
+                .set_key_flags(KeyFlags::empty().set_signing())
+                .unwrap()
+                .set_embedded_signature(backsig)
+                .unwrap(),
+        )
+        .unwrap();
+    let second = second
+        .insert_packets([openpgp::Packet::PublicSubkey(subkey), binding.into()])
+        .unwrap();
+    // Both certificates must independently pass every other generation check.
+    for cert in [&first, &second] {
+        assert!(validate_request(&request(vec![entry(cert)])).is_ok());
+    }
+    let second_entry = if webauthn {
+        let v1::Key::OpenPGP { cert } = entry(&second) else {
+            unreachable!()
+        };
+        v1::Key::WebAuthn {
+            cert,
+            credential: vec!["credential".into()],
+        }
+    } else {
+        entry(&second)
+    };
+    let mut request = request(vec![entry(&first), second_entry]);
+    request.threshold = 2;
+    request
+}
+
+#[tokio::test]
+async fn rejects_shared_signing_material_before_generation() {
+    use axum::response::IntoResponse;
+    for change_timestamp in [false, true] {
+        for webauthn in [false, true] {
+            let request = shared_signing_key_request(change_timestamp, webauthn);
+            let state = Arc::new(AppState::new());
+            let error = generate_quorum(
+                State(state.clone()),
+                Json(GenerateQuorumRequest::V1(request)),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                error.kind,
+                GenerateQuorumErrorKind::InvalidCertificate {
+                    index: 1,
+                    reason: "holders must not share a signing key"
+                }
+            ));
+            assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+            assert_eq!(state.reboot_permit.available_permits(), 1);
+        }
+    }
+}
+
+#[test]
+fn accepts_distinct_holders_with_multiple_signing_keys() {
+    let first = CertBuilder::new()
+        .add_signing_subkey()
+        .add_signing_subkey()
+        .add_authentication_subkey()
+        .add_storage_encryption_subkey()
+        .generate()
+        .unwrap()
+        .0;
+    assert!(
+        validate_request(&request(vec![
+            entry(&first),
+            entry(&holder(true, true, true))
+        ]))
+        .is_ok()
+    );
+}
+
 #[test]
 fn recognizes_caution_critical_notations() {
     let cert = CertBuilder::new()
@@ -294,7 +406,8 @@ fn unsafe_hooks_require_feature_and_environment() {
                 .unwrap();
             let shares: Vec<_> = holders
                 .into_iter()
-                .map(|holder| {
+                .enumerate()
+                .map(|(index, holder)| {
                     let (share, threshold) = OpenPGP
                         .decrypt_one_shard(
                             Some(vec![holder]),
@@ -305,6 +418,7 @@ fn unsafe_hooks_require_feature_and_environment() {
                         )
                         .unwrap();
                     assert_eq!(threshold, bundle.threshold);
+                    assert_eq!(Vec::from(&share)[0], u8::try_from(index + 1).unwrap());
                     share
                 })
                 .collect();

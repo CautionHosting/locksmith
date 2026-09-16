@@ -110,6 +110,7 @@ fn validate_request(request: &v1::GenerateQuorumRequest) -> Result<Vec<Cert>, Ge
     policy.good_critical_notations(&["organization-id@caution.co", "bundle-id@caution.co"]);
     let mut primary_keys = HashSet::new();
     let mut encryption_keys = HashSet::new();
+    let mut signing_keys = HashSet::new();
     let mut certs = Vec::with_capacity(request.keyring.len());
     for (index, key) in request.keyring.iter().enumerate() {
         let armored = match key {
@@ -159,6 +160,15 @@ fn validate_request(request: &v1::GenerateQuorumRequest) -> Result<Vec<Cert>, Ge
         for key in keys().for_storage_encryption() {
             if !encryption_keys.insert(key.key().mpis().clone()) {
                 return Err(invalid("holders must not share an encryption key"));
+            }
+        }
+        let holder_signing_keys: HashSet<_> = keys()
+            .for_signing()
+            .map(|key| key.key().mpis().clone())
+            .collect();
+        for key in holder_signing_keys {
+            if !signing_keys.insert(key) {
+                return Err(invalid("holders must not share a signing key"));
             }
         }
         certs.push(cert);

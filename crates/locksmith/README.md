@@ -1,7 +1,18 @@
 # PGP shard submission
 
-The client reconstructs the bundle's OpenPGP certificates into one in-memory
-public-key armor block for signing. Before listening, the receiver prepares each
+With a private-key file, the client selects the first holder in bundle order
+whose matching private certificate has both decryption and usable signing keys.
+It decrypts with only that certificate and signs against only that holder's
+public certificate. To contribute as another holder, supply that holder's private
+certificate separately. Missing matching keys fail before submission.
+
+The client checks the decrypted threshold and share coordinate against the
+bundle. Keymaker assigns coordinate `index + 1` to each holder in bundle order;
+this invariant also identifies the signer after smartcard decryption. A smartcard
+signing key must match that holder. Old encryption keys remain usable for stored
+shares; signing still follows the existing signature policy.
+
+Before listening, the receiver prepares each
 holder entry separately and reads the threshold from the verified bundle.
 Empty or malformed entries fail at startup; WebAuthn/mixed bundles report an
 unsupported error because their shard transport is not implemented.
@@ -22,7 +33,9 @@ proof envelope.
 Run `cargo test -p locksmith --lib --locked` and
 `cargo check -p locksmith --all-targets --locked` from the workspace root.
 The regression tests exercise software-key signing and receiver verification for
-each holder, unrelated signatures, modified payloads and invalid keyring entries.
+each holder, multi-holder private files through 2-of-2 recovery, missing signing
+keys, mismatched coordinates/thresholds, unrelated signatures, modified payloads
+and invalid keyring entries.
 The synthetic envelope test checks preservation, not attestation validity.
 These local tests do not establish full Nitro submission or smartcard readiness.
 
@@ -70,8 +83,9 @@ Tests use `tests/data/aws-test.cbor`, copied unchanged from Bootproof commit
 `crates/bootproof-sdk/src/format/data/aws-test.cbor`. This signed AWS fixture
 tests historical verification and policy selection, not a proofed quorum bundle.
 Fresh destination attestation, WebAuthn authorization and replay protection remain
-separate requirements. Certificate-service integration, V0 compatibility, runtime
-packaging and real Nitro deployment validation are still outstanding.
+separate requirements. The [runtime image](../../README.md#locksmith-runtime-image)
+packages operator-supplied bundle, policy and ciphertext inputs. Certificate-service
+integration, V0 compatibility and real Nitro deployment validation remain outstanding.
 
 ### Synthetic Keymaker proofs (tests only)
 

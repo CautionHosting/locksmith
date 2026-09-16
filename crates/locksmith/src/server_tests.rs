@@ -205,6 +205,41 @@ async fn recovery_counts_only_distinct_valid_contributions() {
 }
 
 #[tokio::test]
+async fn multi_holder_private_file_can_complete_two_of_two_recovery() {
+    use crate::client::{decrypt_shard, tests as fixture};
+    let holders = [fixture::holder(), fixture::holder()];
+    let mut bundle = fixture::bundle(&holders, 2);
+    bundle.public_key =
+        String::from_utf8(generated_public_key([7; 32]).armored().to_vec().unwrap()).unwrap();
+    let recovery = Recovery::new(&GenerateQuorumBundle::V1(bundle.clone())).unwrap();
+    let keyrings = recovery.keyrings.clone();
+    let (tx, rx) = tokio::sync::mpsc::channel(2);
+    let (status_tx, mut status_rx) = tokio::sync::broadcast::channel(2);
+    let task = tokio::spawn(async move { reconstitute_shards(rx, status_tx, &recovery).await });
+    let files = [
+        fixture::PrivateKeyFile::new(&[&holders[1], &holders[0]]),
+        fixture::PrivateKeyFile::new(&[&holders[1]]),
+    ];
+    for (index, file) in files.iter().enumerate() {
+        let (request, keyring) = decrypt_shard(&bundle, Some(&file.0), fixture::prompt()).unwrap();
+        let signature = crate::openpgp::sign(
+            &keyring,
+            "payload",
+            &mut keyfork_prompt::Headless::new(),
+            Some(&file.0),
+        )
+        .unwrap();
+        let holder = authenticate_holder(&keyrings, "payload", &signature).unwrap();
+        assert_eq!(holder, index);
+        assert!(
+            matches!(submit(&tx, &mut status_rx, holder, request.threshold, request.shard).await,
+            models::SendSignedEncryptedShardResponse::Accepted { remaining } if remaining == 1 - index as u8)
+        );
+    }
+    assert_eq!(task.await.unwrap().unwrap(), [7; 32]);
+}
+
+#[tokio::test]
 async fn incorrect_reconstructed_entropy_is_rejected() {
     let recovery = Recovery {
         threshold: 1,

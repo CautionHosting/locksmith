@@ -7,7 +7,13 @@ use bootproof_sdk::format::{VerifiableSignedAttestationFormat, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
 use keyfork_shard::{Format, openpgp::OpenPGP};
+use keymaker_models::generate_quorum::v1;
 use rand::Rng;
+use sequoia_openpgp::{
+    cert::CertParser,
+    parse::Parse,
+    policy::{NullPolicy, StandardPolicy},
+};
 use serde_cbor::Value as CborValue;
 use sha2::Sha256;
 use std::panic::Location;
@@ -40,9 +46,14 @@ strike! {
             HexEncodeRecryptedShard,
             SignHexEncodedRecryptedShard,
             BundleAccess,
+            InvalidQuorum,
+            NoMatchingHolderKeys,
+            ShareHolderMismatch,
+            ShareThresholdMismatch,
         },
         location: &'static Location<'static>,
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     }
 }
 
@@ -59,9 +70,132 @@ impl FromContexts for SendShardError {
         Self {
             kind: short_lived_ctx,
             location,
-            source,
+            source: Some(source),
         }
     }
+}
+
+impl SendShardError {
+    #[track_caller]
+    fn invalid(kind: SendShardErrorKind) -> Self {
+        Self {
+            kind,
+            location: Location::caller(),
+            source: None,
+        }
+    }
+}
+
+pub(crate) fn decrypt_shard(
+    bundle: &v1::GenerateQuorumResponse,
+    private_key_path: Option<&std::path::Path>,
+    prompt: std::rc::Rc<std::sync::Mutex<Box<dyn keyfork_prompt::PromptHandler>>>,
+) -> Result<(models::SendShardRequest, String), SendShardError> {
+    use SendShardErrorKind as Kind;
+    if bundle.threshold == 0
+        || bundle.threshold > bundle.max
+        || bundle.max > 254
+        || usize::from(bundle.max) != bundle.keyring.len()
+    {
+        return Err(SendShardError::invalid(Kind::InvalidQuorum));
+    }
+    let keyring = crate::openpgp::reconstruct_keyring(&bundle.keyring)
+        .with_contexts((), Kind::BundleAccess)?;
+    let private_keys = private_key_path
+        .map(OpenPGP::discover_certs)
+        .transpose()
+        .with_contexts((), Kind::ParsePrivateKeys)?;
+    let (selected, private_keys) = if let Some(private_keys) = private_keys {
+        let certificates = CertParser::from_bytes(&keyring)
+            .and_then(|parser| parser.collect::<sequoia_openpgp::Result<Vec<_>>>())
+            .map_err(|source| {
+                SendShardError::from_contexts(
+                    (),
+                    Kind::BundleAccess,
+                    Location::caller(),
+                    source.into(),
+                )
+            })?;
+        if certificates.len() != bundle.keyring.len() {
+            return Err(SendShardError::invalid(Kind::InvalidQuorum));
+        }
+        let mut policy = StandardPolicy::new();
+        policy.good_critical_notations(&["organization-id@caution.co", "bundle-id@caution.co"]);
+        let decryption_policy = NullPolicy::new();
+        let selected = certificates
+            .iter()
+            .enumerate()
+            .find_map(|(index, cert)| {
+                private_keys
+                    .iter()
+                    .find(|private| {
+                        if private.fingerprint() != cert.fingerprint() {
+                            return false;
+                        }
+                        let secrets: std::collections::HashSet<_> = private
+                            .keys()
+                            .secret()
+                            .map(|key| key.fingerprint())
+                            .collect();
+                        let can_sign = cert
+                            .keys()
+                            .with_policy(&policy, None)
+                            .supported()
+                            .alive()
+                            .revoked(false)
+                            .for_signing()
+                            .any(|key| secrets.contains(&key.fingerprint()));
+                        // Old encryption keys must remain usable for previously generated shares.
+                        let can_decrypt = cert
+                            .keys()
+                            .with_policy(&decryption_policy, None)
+                            .for_storage_encryption()
+                            .any(|key| secrets.contains(&key.fingerprint()));
+                        can_sign && can_decrypt
+                    })
+                    .map(|private| (index, private.clone()))
+            })
+            .ok_or_else(|| SendShardError::invalid(Kind::NoMatchingHolderKeys))?;
+        (Some(selected.0), Some(vec![selected.1]))
+    } else {
+        (None, None)
+    };
+    let messages = OpenPGP
+        .parse_shard_file(bundle.shardfile.as_bytes())
+        .with_contexts((), Kind::ParseShardfile)?;
+    let (share, threshold) = OpenPGP
+        .decrypt_one_shard(private_keys, &messages, prompt)
+        .with_contexts((), Kind::DecryptShard)?;
+    let request = models::SendShardRequest {
+        shard: Vec::from(&share),
+        threshold,
+    };
+    let keyring = signing_keyring(bundle, &request, selected)?;
+    Ok((request, keyring))
+}
+
+fn signing_keyring(
+    bundle: &v1::GenerateQuorumResponse,
+    request: &models::SendShardRequest,
+    selected: Option<usize>,
+) -> Result<String, SendShardError> {
+    use SendShardErrorKind as Kind;
+    if request.threshold != bundle.threshold {
+        return Err(SendShardError::invalid(Kind::ShareThresholdMismatch));
+    }
+    // Keymaker zips bundle holders with the dealer's coordinates 1..=max.
+    let holder = request
+        .shard
+        .first()
+        .and_then(|coordinate| coordinate.checked_sub(1))
+        .map(usize::from)
+        .filter(|holder| *holder < bundle.keyring.len())
+        .filter(|holder| selected.is_none_or(|selected| *holder == selected));
+    let holder = holder
+        .filter(|_| request.shard.len() == 33)
+        .ok_or_else(|| SendShardError::invalid(Kind::ShareHolderMismatch))?;
+    crate::openpgp::reconstruct_keyring(&bundle.keyring[holder..=holder])
+        .with_contexts((), Kind::BundleAccess)
 }
 
 #[tracing::instrument(skip_all)]
@@ -138,31 +272,15 @@ pub async fn send_shard(
         keyfork_prompt::default_handler().expect("please give us a handler"),
     ));
     let bundle = bundle.clone().to_latest();
-    let keyring = crate::openpgp::reconstruct_keyring(&bundle.keyring)
-        .with_contexts((), ErrorKind::BundleAccess)?;
-    let messages = OpenPGP
-        .parse_shard_file(bundle.shardfile.as_bytes())
-        .with_contexts((), ErrorKind::ParseShardfile)?;
-    // NOTE: This code is very error prone and only incidentally works.
-    // It is not dyn compatible.
-    let opt_private_keys = opt_private_key_path
-        .as_deref()
-        .map(OpenPGP::discover_certs)
-        .transpose()
-        .with_contexts((), ErrorKind::ParsePrivateKeys)?;
-    let (share, threshold) = OpenPGP
-        .decrypt_one_shard(opt_private_keys, &messages, temp_ph.clone())
-        .with_contexts((), ErrorKind::DecryptShard)?;
+    let (request, keyring) =
+        decrypt_shard(&bundle, opt_private_key_path.as_deref(), temp_ph.clone())?;
 
     // Create the encrypted payload
     //
     // decrypt_one_shard actually decodes the share, but we have to re-encode it again
     // to encrypt it. this could probably be optimized.
-    let send_shard_request_bytes = serde_json::to_vec(&models::SendShardRequest {
-        shard: Vec::from(&share),
-        threshold,
-    })
-    .expect("request is always serializable");
+    let send_shard_request_bytes =
+        serde_json::to_vec(&request).expect("request is always serializable");
     let encrypted_send_shard_request_bytes = shared_key
         .encrypt(nonce, send_shard_request_bytes.as_slice())
         .with_contexts((), ErrorKind::RecryptShard)?;
@@ -224,3 +342,7 @@ fn get_user_data(document: CborValue) -> Result<[u8; 32], GetPublicKeyError> {
         .try_into()
         .map_err(|v: Vec<u8>| GetPublicKeyError::InvalidKeyLen(v.len()))
 }
+
+#[cfg(all(test, feature = "rpgpie"))]
+#[path = "client_tests.rs"]
+pub(crate) mod tests;
