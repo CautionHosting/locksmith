@@ -55,6 +55,12 @@ on the authenticated generation time, not the time the saved bundle is loaded:
 a proof generated before the cutoff can remain valid after certificate expiry.
 This follows [the timestamp policy in #7](https://codeberg.org/caution/locksmith/issues/7#issuecomment-19223141).
 
+`bundle::load_response_with_timestamp` returns the verified bundle and
+`Some(SystemTime)` from the signed attestation, allowing callers to validate
+historical holder eligibility at generation time. The existing `load_response`
+continues to return only the bundle. The explicitly enabled synthetic test path
+returns `None` because its proof has no authenticated time.
+
 Expiry values outside the host's supported `SystemTime` range are rejected when
 parsing the policy. Every PCR value must decode to exactly 48 bytes; truncated
 values fail with a policy diagnostic. Missing or null expiry values mean no cutoff.

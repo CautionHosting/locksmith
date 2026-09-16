@@ -30,14 +30,15 @@ fn fixture() -> (KeymakerPcrSet, Vec<u8>, Vec<u8>, SystemTime) {
 
 #[test]
 fn later_valid_policy_succeeds_after_a_failed_set() {
-    let (set, nonce, data, _) = fixture();
+    let (set, nonce, data, at) = fixture();
     let mut wrong = set.clone();
     wrong.pcrs.get_mut(&0).unwrap()[0] ^= 1;
-    KeymakerPcrPolicy {
+    let verified_at = KeymakerPcrPolicy {
         sets: vec![wrong, set],
     }
     .verify_necroproof(PROOF, &nonce, &data)
     .unwrap();
+    assert_eq!(verified_at, at);
 }
 
 #[test]

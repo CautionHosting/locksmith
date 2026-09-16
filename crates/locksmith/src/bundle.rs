@@ -47,7 +47,7 @@ impl KeymakerPcrPolicy {
         necroproof: &[u8],
         nonce: &[u8],
         expected_user_data: &[u8],
-    ) -> Result<(), VerifyNecroproofError> {
+    ) -> Result<SystemTime, VerifyNecroproofError> {
         if self.sets.is_empty() {
             return Err(VerifyNecroproofError::NoPcrSets);
         }
@@ -55,7 +55,7 @@ impl KeymakerPcrPolicy {
         for (index, pcr_set) in self.sets.iter().enumerate() {
             match verify_necroproof_with_pcrs(necroproof, &pcr_set.pcrs, nonce, expected_user_data)
             {
-                Ok(at) if pcr_set.is_valid_at(at) => return Ok(()),
+                Ok(at) if pcr_set.is_valid_at(at) => return Ok(at),
                 Ok(_) => errors.push((
                     index,
                     VerifyNecroproofError::PolicyExpired {
@@ -277,6 +277,17 @@ pub fn load_response(
     response: GenerateQuorumResponse,
     policy: &KeymakerPcrPolicy,
 ) -> Result<GenerateQuorumBundle, LoadQuorumBundleError> {
+    load_response_with_timestamp(response, policy).map(|(bundle, _)| bundle)
+}
+
+/// Verify the bundle and return its authenticated attestation time.
+///
+/// Only the explicitly enabled `unsafe-e2e` synthetic proof returns `None`;
+/// synthetic proofs contain no authenticated timestamp.
+pub fn load_response_with_timestamp(
+    response: GenerateQuorumResponse,
+    policy: &KeymakerPcrPolicy,
+) -> Result<(GenerateQuorumBundle, Option<SystemTime>), LoadQuorumBundleError> {
     if response.necroproof.is_empty() {
         return Err(LoadQuorumBundleError::EmptyNecroproof);
     }
@@ -301,14 +312,14 @@ pub fn load_response(
         && response.necroproof == nonce
     {
         tracing::warn!("accepting synthetic Keymaker proof in unsafe-e2e build");
-        return Ok(response.data);
+        return Ok((response.data, None));
     }
 
-    policy
+    let at = policy
         .verify_necroproof(&response.necroproof, &nonce, &bundle_hash)
         .map_err(|source| LoadQuorumBundleError::VerifyNecroproof { source })?;
 
-    Ok(response.data)
+    Ok((response.data, Some(at)))
 }
 
 #[cfg(test)]

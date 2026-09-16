@@ -4,7 +4,7 @@ use keymaker_models::{
         GenerateQuorumResponse, deterministic_bundle_hash, deterministic_necroproof_nonce,
     },
 };
-use locksmith::bundle::{KeymakerPcrPolicy, load_response};
+use locksmith::bundle::{KeymakerPcrPolicy, load_response, load_response_with_timestamp};
 use serde_json::json;
 
 #[test]
@@ -46,6 +46,12 @@ fn synthetic_proof_gate() {
     let accepted = cfg!(feature = "unsafe-e2e")
         && std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1");
     assert_eq!(load_response(response.clone(), &policy).is_ok(), accepted);
+    let timed = load_response_with_timestamp(response.clone(), &policy);
+    assert_eq!(timed.is_ok(), accepted);
+    if let Ok((bundle, at)) = timed {
+        assert_eq!(bundle, response.data);
+        assert_eq!(at, None);
+    }
     let mut wrong = response.clone();
     wrong.necroproof[0] ^= 1;
     assert!(load_response(wrong, &policy).is_err());
