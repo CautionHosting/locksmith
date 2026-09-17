@@ -108,6 +108,14 @@ fn decrypt_selected_shard(
     {
         return Err(SendShardError::invalid(Kind::InvalidQuorum));
     }
+    #[cfg(feature = "rpgpie")]
+    if let (None, Some(holder)) = (private_key_path, holder) {
+        let (shard, threshold, index) = crate::openpgp::selected_card::decrypt(bundle, holder, prompt)
+            .with_contexts((), Kind::DecryptShard)?;
+        let request = models::SendShardRequest { shard, threshold };
+        let keyring = signing_keyring(bundle, &request, Some(index))?;
+        return Ok((request, keyring));
+    }
     let keyring = crate::openpgp::reconstruct_keyring(&bundle.keyring)
         .with_contexts((), Kind::BundleAccess)?;
     let private_keys = private_key_path

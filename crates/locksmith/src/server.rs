@@ -114,7 +114,7 @@ impl RequestStub {
 #[tracing::instrument(skip_all)]
 async fn server(
     address: std::net::SocketAddr,
-    keyrings: Arc<Vec<String>>,
+    keyrings: Arc<Vec<HolderKeyring>>,
     tx: tokio::sync::mpsc::Sender<Payload>,
     broadcast_tx: tokio::sync::broadcast::Sender<ReconstitutionStatus>,
 ) -> Result<(), ReceiveShardsError> {
@@ -164,7 +164,7 @@ async fn server(
 #[tracing::instrument(skip_all, fields(%request_stub))]
 async fn handle_client(
     mut client: tokio::net::TcpStream,
-    keyrings: Arc<Vec<String>>,
+    keyrings: Arc<Vec<HolderKeyring>>,
     tx: tokio::sync::mpsc::Sender<Payload>,
     mut broadcast_rx: tokio::sync::broadcast::Receiver<ReconstitutionStatus>,
     request_stub: RequestStub,
@@ -286,12 +286,12 @@ async fn handle_client(
 
 // Authenticate against each proof-bound holder entry, never against a claimed issuer ID.
 fn authenticate_holder(
-    keyrings: &[String],
+    keyrings: &[HolderKeyring],
     data: &str,
     signature: &str,
 ) -> Result<usize, ReceiveShardsError> {
     let mut matches = keyrings.iter().enumerate().filter_map(|(index, keyring)| {
-        crate::openpgp::verify_detached(keyring, data, signature)
+        keyring.verify(data, signature)
             .is_ok()
             .then_some(index)
     });
@@ -310,14 +310,34 @@ fn recovery_error(kind: ReceiveShardsErrorKind) -> ReceiveShardsError {
     }
 }
 
+#[derive(Clone)]
+struct HolderKeyring {
+    certificate: String,
+    generation_time: Option<SystemTime>,
+}
+impl HolderKeyring {
+    fn verify(&self, data: &str, signature: &str) -> Result<(), crate::release::Error> {
+        if let Some(at) = self.generation_time {
+            crate::custody::verify_holder_signature(&self.certificate, data, signature, at)?;
+        } else {
+            crate::openpgp::verify_detached(&self.certificate, data, signature).with_contexts((), "external holder signature")?;
+        }
+        Ok(())
+    }
+}
+
 struct Recovery {
     threshold: u8,
-    keyrings: Arc<Vec<String>>,
+    keyrings: Arc<Vec<HolderKeyring>>,
     public_key: Fingerprint,
 }
 
 impl Recovery {
+    #[cfg(test)]
     fn new(bundle: &QuorumBundle) -> Result<Self, ReceiveShardsError> {
+        Self::new_at(bundle, None)
+    }
+    fn new_at(bundle: &QuorumBundle, at: Option<SystemTime>) -> Result<Self, ReceiveShardsError> {
         let bundle = bundle.clone().to_latest();
         if bundle.threshold == 0
             || bundle.threshold > bundle.max
@@ -330,8 +350,12 @@ impl Recovery {
             .keyring
             .iter()
             .map(|key| {
-                crate::openpgp::reconstruct_keyring(std::slice::from_ref(key))
-                    .with_contexts((), ReceiveShardsErrorKind::BundleAccess)
+                let certificate = crate::openpgp::reconstruct_keyring(std::slice::from_ref(key))
+                    .with_contexts((), ReceiveShardsErrorKind::BundleAccess)?;
+                let generation_time = if matches!(key, keymaker_models::generate_quorum::v1::Key::WebAuthn { .. }) {
+                    Some(crate::custody::generation_time(at).with_contexts((), ReceiveShardsErrorKind::BundleAccess)?)
+                } else { None };
+                Ok(HolderKeyring { certificate, generation_time })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let public_key = Cert::from_bytes(&bundle.public_key)
@@ -469,8 +493,17 @@ pub async fn receive_shards(
     address: std::net::SocketAddr,
     bundle: &QuorumBundle,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
-    // The caller supplies a bundle loaded through proof verification.
-    let recovery = Recovery::new(bundle)?;
+    receive_shards_at(address, bundle, None).await
+}
+
+/// The generation timestamp must come from the verified Keymaker proof.
+/// WebAuthn snapshots require this timestamp; the legacy entry point remains PGP-only.
+pub async fn receive_shards_at(
+    address: std::net::SocketAddr,
+    bundle: &QuorumBundle,
+    generation_time: Option<SystemTime>,
+) -> Result<Vec<u8>, ReceiveShardsError> {
+    let recovery = Recovery::new_at(bundle, generation_time)?;
     let (tx, rx) = tokio::sync::mpsc::channel::<Payload>(255);
     let (reconstitution_tx, _reconstitution_rx) =
         tokio::sync::broadcast::channel::<ReconstitutionStatus>(255);

@@ -337,6 +337,7 @@ fn mock_mixed_release_preserves_holder_and_transport() {
     };
     let data = GenerateQuorumBundle::V1(bundle.clone());
     let proof = deterministic_necroproof_nonce(&deterministic_bundle_hash(&data).unwrap()).unwrap();
+    auth.ca = auth.ca.strip_secret_key_material();
     auth.keymaker_policy = KeymakerPcrPolicy {
         sets: vec![crate::bundle::KeymakerPcrSet {
             pcrs: (0..=2).map(|i| (i, vec![0xab; 48])).collect(),
@@ -391,7 +392,7 @@ fn mock_mixed_release_preserves_holder_and_transport() {
             |context, bundle, key| crypto::recrypt(context, bundle, key, private.clone()),
         )
         .unwrap();
-    crypto::verify_request(&armor(&private), &encrypted).unwrap();
+    crypto::verify_request(&armor(&private), &encrypted, SystemTime::now()).unwrap();
     let transport: crate::models::SendEncryptedShardRequest =
         serde_json::from_str(&encrypted.signed_payload).unwrap();
     let shared = destination.diffie_hellman(&PublicKey::from(transport.public_key));
@@ -415,7 +416,7 @@ fn mock_mixed_release_preserves_holder_and_transport() {
     assert_eq!(share.shard.len(), 33);
     let mut altered = encrypted;
     altered.signed_payload.push(' ');
-    assert!(crypto::verify_request(&armor(&private), &altered).is_err());
+    assert!(crypto::verify_request(&armor(&private), &altered, SystemTime::now()).is_err());
 }
 
 #[test]
@@ -429,6 +430,8 @@ fn certificate_context_requires_the_expected_ca_bundle_and_index() {
         types::SignatureType,
     };
     let (ca, _) = CertBuilder::general_purpose(None, Some("test CA"))
+        .set_creation_time(SystemTime::now() - Duration::from_secs(3 * 86400))
+        .set_validity_period(Duration::from_secs(86400))
         .generate()
         .unwrap();
     let (other_ca, _) = CertBuilder::general_purpose(None, Some("wrong CA"))
@@ -488,11 +491,11 @@ fn certificate_context_requires_the_expected_ca_bundle_and_index() {
     let cert = make(false);
     let at = SystemTime::now();
     assert_eq!(
-        certified_context(&cert, &ca, [1; 16], 0, at).unwrap(),
+        certified_context(&cert, &ca.clone().strip_secret_key_material(), [1; 16], 0, at).unwrap(),
         [2; 16]
     );
-    assert!(certified_context(&cert, &other_ca, [1; 16], 0, at).is_err());
-    assert!(certified_context(&cert, &ca, [3; 16], 0, at).is_err());
-    assert!(certified_context(&cert, &ca, [1; 16], 1, at).is_err());
-    assert!(certified_context(&make(true), &ca, [1; 16], 0, at).is_err());
+    assert!(certified_context(&cert, &other_ca.strip_secret_key_material(), [1; 16], 0, at).is_err());
+    assert!(certified_context(&cert, &ca.clone().strip_secret_key_material(), [3; 16], 0, at).is_err());
+    assert!(certified_context(&cert, &ca.clone().strip_secret_key_material(), [1; 16], 1, at).is_err());
+    assert!(certified_context(&make(true), &ca.clone().strip_secret_key_material(), [1; 16], 0, at).is_err());
 }

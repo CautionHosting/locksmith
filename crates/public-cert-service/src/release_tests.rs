@@ -264,7 +264,7 @@ fn custody_http_and_destination_recover_mixed_quorum() {
                         eprintln!("complete release");
                         let encrypted: SendSignedEncryptedShardRequest =
                             post(&app, "/v1/releases/complete", &request).await;
-                        crypto::verify_request(&derived, &encrypted).unwrap();
+                        crypto::verify_request(&derived, &encrypted, std::time::SystemTime::now()).unwrap();
                         assert!(matches!(
                             destination.send(encrypted).await.unwrap(),
                             locksmith::models::SendSignedEncryptedShardResponse::Accepted {

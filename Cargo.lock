@@ -2457,6 +2457,7 @@ dependencies = [
  "keymaker-models",
  "openpgp-card 0.6.1",
  "openpgp-card-rpgp",
+ "openpgp-card-sequoia",
  "pgp",
  "rand 0.8.6",
  "rpgpie",

@@ -2,6 +2,8 @@ use dterror::*;
 use std::panic::Location;
 use structstruck::strike;
 
+#[cfg(feature = "rpgpie")]
+pub(crate) mod selected_card;
 mod keyring;
 pub(crate) use keyring::reconstruct_keyring;
 

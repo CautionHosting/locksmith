@@ -2,6 +2,7 @@ pub mod models;
 pub mod release;
 mod openpgp;
 
+pub mod custody;
 pub mod bundle;
 pub mod client;
 pub mod server;

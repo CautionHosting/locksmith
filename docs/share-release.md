@@ -52,3 +52,19 @@ dependency/runtime pins and the consolidated real Nitro test remain pending.
 Do not deploy until those pins and the automated acceptance gate are complete. V0/earlier-V1
 compatibility, credential rotation, multi-instance state and production root
 management remain separate work; #7/#10/#11/#12 are not closed by this change.
+
+## Durable custody identities
+
+WebAuthn holder snapshots are validated at authenticated Keymaker generation time.
+The CLI and receiver verify current transport signatures against those exact
+eligible signing keys, even after snapshot expiry. Signatures are not backdated;
+proof-bound bundles are unchanged. External-PGP verification retains its existing
+certificate-lifetime rules. A configured CA primary key is a durable trust anchor:
+snapshot expiration alone does not retire it, while revocation, algorithm,
+certification-signature and organization/bundle/index checks remain enforced.
+These rules do not discover later revocations or rotate the stored holder keys.
+
+Explicit smartcard holder selection filters encryption fingerprints before PIN
+entry and both metadata/share decryption. An absent selected card fails without
+prompting another holder's card. Unit tests cover both enumeration orders; physical
+multi-card operation remains a hardware acceptance check.

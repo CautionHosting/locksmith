@@ -15,6 +15,7 @@ rpgpie = [
 	"dep:pgp",
 	"dep:rpgpie",
 	"dep:card-backend",
+	"dep:openpgp-card-sequoia",
 ]
 
 [dependencies]
@@ -25,6 +26,7 @@ openpgp-card = { version = "0.6.0", optional = true }
 card-backend = { version = "0.2.0", optional = true }
 card-backend-pcsc = { version = "0.5.1", optional = true }
 openpgp-card-rpgp = { version = "0.7.0", optional = true }
+openpgp-card-sequoia = { version = "0.2.2", optional = true }
 
 cfg-if = "1.0.4"
 structstruck = "0.5.1"

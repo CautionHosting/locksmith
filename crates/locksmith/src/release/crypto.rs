@@ -217,9 +217,8 @@ pub fn recrypt(
 }
 
 /// The CLI checks the selected holder's signature before forwarding ciphertext.
-pub fn verify_request(cert: &str, request: &SendSignedEncryptedShardRequest) -> Result<(), Error> {
-    crate::openpgp::verify_detached(cert, &request.signed_payload, &request.signature)
-        .with_contexts((), "recryptor holder signature")
+pub fn verify_request(cert: &str, request: &SendSignedEncryptedShardRequest, at: std::time::SystemTime) -> Result<(), Error> {
+    crate::custody::verify_holder_signature(cert, &request.signed_payload, &request.signature, at)
 }
 
 /// A single destination connection: attestation and shard submission cannot switch sessions.

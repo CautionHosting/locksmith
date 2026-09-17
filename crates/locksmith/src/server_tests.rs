@@ -159,7 +159,7 @@ async fn recovery_counts_only_distinct_valid_contributions() {
     use models::SendSignedEncryptedShardResponse::{Accepted, Rejected};
     let recovery = Recovery {
         threshold: 3,
-        keyrings: Arc::new(vec![String::new(); 5]),
+        keyrings: Arc::new(vec![HolderKeyring { certificate: String::new(), generation_time: None }; 5]),
         public_key: generated_public_key([7; 32]).fingerprint(),
     };
     let shares: Vec<_> = Sharks(3)
@@ -243,7 +243,7 @@ async fn multi_holder_private_file_can_complete_two_of_two_recovery() {
 async fn incorrect_reconstructed_entropy_is_rejected() {
     let recovery = Recovery {
         threshold: 1,
-        keyrings: Arc::new(vec![String::new()]),
+        keyrings: Arc::new(vec![HolderKeyring { certificate: String::new(), generation_time: None }]),
         public_key: generated_public_key([7; 32]).fingerprint(),
     };
     let shard = Vec::from(&Sharks(1).dealer(&[8; 32]).next().unwrap());
@@ -258,4 +258,18 @@ async fn incorrect_reconstructed_entropy_is_rejected() {
         task.await.unwrap().unwrap_err().kind,
         ReceiveShardsErrorKind::RecoveredKeyMismatch
     ));
+}
+
+#[test]
+fn proof_bound_holder_survives_snapshot_expiry_without_changing_external_pgp() {
+    let created = SystemTime::now() - std::time::Duration::from_secs(3 * 86400);
+    let (cert, _) = CertBuilder::new().set_creation_time(created)
+        .set_validity_period(std::time::Duration::from_secs(86400))
+        .add_userid("expired custody holder").add_signing_subkey().generate().unwrap();
+    let public = String::from_utf8(cert.clone().strip_secret_key_material().armored().to_vec().unwrap()).unwrap();
+    let signature = sign(&cert, "transport");
+    let custody = HolderKeyring { certificate: public.clone(), generation_time: Some(created + std::time::Duration::from_secs(3600)) };
+    assert_eq!(authenticate_holder(&[custody], "transport", &signature).unwrap(), 0);
+    let external = HolderKeyring { certificate: public, generation_time: None };
+    assert!(authenticate_holder(&[external], "transport", &signature).is_err());
 }

@@ -430,17 +430,7 @@ fn certified_context(
 ) -> Result<[u8; 16], Error> {
     let mut policy = StandardPolicy::new();
     policy.good_critical_notations(&[ORG, BUNDLE]);
-    if !ca
-        .keys()
-        .with_policy(&policy, at)
-        .supported()
-        .alive()
-        .revoked(false)
-        .for_certification()
-        .any(|k| k.fingerprint() == ca.fingerprint())
-    {
-        return Err(Error::invalid("CA not valid at generation"));
-    }
+    crate::custody::validate_ca_anchor(ca, at)?;
     if cert.is_tsk() {
         return Err(Error::invalid("bundle must contain public certificates"));
     }
@@ -452,6 +442,10 @@ fn certified_context(
             source.into(),
         )
     })?;
+    valid.alive().map_err(crate::custody::pgp_error)?;
+    if matches!(valid.revocation_status(), sequoia_openpgp::types::RevocationStatus::Revoked(_)) {
+        return Err(Error::invalid("revoked holder certificate"));
+    }
     let expected = format!("Caution public certificate index={index}");
     let uid = valid
         .userids()

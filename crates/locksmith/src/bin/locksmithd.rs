@@ -7,14 +7,16 @@ async fn get_shards() -> Vec<u8> {
     let policy = locksmith::bundle::KeymakerPcrPolicy::from_json(&policy_text)
         .expect("valid Keymaker PCR policy JSON");
     let bundle_text = std::fs::read_to_string("/etc/caution/bundle.json").expect("has bundle");
-    let bundle =
-        locksmith::bundle::load_json(&bundle_text, &policy).expect("valid verified bundle json");
+    let response = serde_json::from_str(&bundle_text).expect("valid bundle JSON");
+    let (bundle, generation_time) = locksmith::bundle::load_response_with_timestamp(response, &policy)
+        .expect("valid verified bundle");
 
-    let reconstituted_secret = locksmith::server::receive_shards(
+    let reconstituted_secret = locksmith::server::receive_shards_at(
         "0.0.0.0:49504"
             .parse()
             .expect("known address can be parsed"),
         &bundle,
+        generation_time,
     )
     .await
     .expect("can get shards");
