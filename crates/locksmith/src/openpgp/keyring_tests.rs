@@ -204,7 +204,7 @@ fn malformed_and_unsupported_entries_fail_without_partial_keyring() {
         ])
         .unwrap_err()
         .kind,
-        Kind::UnsupportedWebAuthn(1)
+        Kind::EmptyEntry(1)
     );
 }
 

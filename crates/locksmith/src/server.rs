@@ -4,7 +4,6 @@ use aes_gcm::{
     aead::{Aead, consts::U12},
 };
 use blahaj::{Share, Sharks};
-use bootproof::format::{Format, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
 use sequoia_openpgp::{Cert, Fingerprint, parse::Parse};
@@ -178,15 +177,14 @@ async fn handle_client(
         .with_contexts((), ErrorKind::ReceiveRequest)?;
 
     debug!("generating attestation");
-    let attestation = Nitro
-        .generate(
-            Some(&PublicKey::from(&secret).as_bytes()[..]),
-            request.nonce.as_bytes().into(),
+    let attestation = crate::release::generate_live(
+            &PublicKey::from(&secret).as_bytes()[..],
+            &request.nonce,
         )
         .map_err(|source| ReceiveShardsError {
             kind: ReceiveShardsErrorKind::GenerateAttestation,
             location: Location::caller(),
-            source: Some(source),
+            source: Some(Box::new(source)),
         })?;
 
     let request: models::SendSignedEncryptedShardRequest = crate::send_and_receive(

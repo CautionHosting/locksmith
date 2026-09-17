@@ -16,6 +16,7 @@ fn main() {
             error!("- caused by: {new_source}");
             source = new_source.source();
         }
+        std::process::exit(1);
     }
 }
 
@@ -28,7 +29,9 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     info!(%listen_addr, "binding public certificate service listener");
     let listener = TcpListener::bind(&listen_addr).await?;
 
-    let app = router(Arc::new(AppState::new()));
+    let app = router(Arc::new(AppState {
+        release: public_cert_service::release::configured_authorizer()?.map(Arc::new),
+    }));
     info!("serving public certificate service");
     axum::serve(listener, app).await?;
 

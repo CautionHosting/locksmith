@@ -7,6 +7,7 @@
 //! derivation used by v1 public certificate bundles.
 
 pub mod derivation;
+pub mod release;
 pub mod routes;
 
 use std::sync::Arc;
@@ -18,13 +19,15 @@ use axum::{
 };
 use tower_http::trace::TraceLayer;
 
-#[derive(Debug, Default)]
-pub struct AppState;
+#[derive(Default)]
+pub struct AppState {
+    pub release: Option<Arc<locksmith::release::Authorizer>>,
+}
 
 impl AppState {
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 }
 
@@ -36,6 +39,18 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(routes::derive_public_certificates),
         )
         .layer(DefaultBodyLimit::max(4096))
+        .route(
+            "/v1/releases/begin",
+            post(release::begin).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/releases/prepare",
+            post(release::prepare).layer(DefaultBodyLimit::max(32768)),
+        )
+        .route(
+            "/v1/releases/complete",
+            post(release::complete).layer(DefaultBodyLimit::max(16384)),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

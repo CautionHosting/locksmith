@@ -8,7 +8,6 @@ pub(crate) enum ReconstructKeyringErrorKind {
     EmptyKeyring,
     EmptyEntry(usize),
     ParseEntry(usize),
-    UnsupportedWebAuthn(usize),
     Serialize,
 }
 
@@ -61,11 +60,9 @@ pub(crate) fn reconstruct_keyring(keys: &[Key]) -> Result<String, ReconstructKey
     let mut output = armor::Writer::new(Vec::new(), armor::Kind::PublicKey)
         .with_contexts((), Kind::Serialize)?;
     for (index, key) in keys.iter().enumerate() {
-        let Key::OpenPGP { cert } = key else {
-            return Err(ReconstructKeyringError::without_source(
-                Kind::UnsupportedWebAuthn(index),
-            ));
-        };
+        // Both custody choices authenticate the existing receiver request with
+        // this holder certificate. WebAuthn authorization stays in the custody enclave.
+        let (Key::OpenPGP { cert } | Key::WebAuthn { cert, .. }) = key;
         if cert.trim().is_empty() {
             return Err(ReconstructKeyringError::without_source(Kind::EmptyEntry(
                 index,

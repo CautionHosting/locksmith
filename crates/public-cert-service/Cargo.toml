@@ -6,6 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+locksmith = { path = "../locksmith" }
+dterror = "0.1.0"
 anyhow = "1.0.102"
 bootproof = { git = "https://codeberg.org/caution/bootproof.git", rev = "821b5c63e80f082f6d67ba3695c11416933489ec", version = "0.1.0" }
 axum = { version = "0.8.8", features = ["macros"] }
@@ -29,7 +31,14 @@ tracing-subscriber = "0.3.23"
 zalloc = "0.1.0"
 
 [dev-dependencies]
+keyfork-mnemonic = { version = "0.4.2", registry = "distrust", default-features = false }
+# Sibling workspace model crate, identical to keymaker/keymaker-client dependencies.
+keymaker-models = { version = "0.1.0", path = "../keymaker-models" }
+keyforkd = { version = "0.1.5", registry = "distrust", default-features = false }
+keyfork-shard = { version = "0.4.0", registry = "distrust", default-features = false, features = ["openpgp"] }
+webauthn-rs = "0.5.5"
+webauthn-authenticator-rs = { version = "0.5.5", default-features = false, features = ["softpasskey"] }
 tower = { version = "0.5.3", features = ["util"] }
 
 [features]
-unsafe-e2e = []
+unsafe-e2e = ["locksmith/unsafe-e2e"]

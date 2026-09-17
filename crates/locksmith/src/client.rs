@@ -91,6 +91,15 @@ pub(crate) fn decrypt_shard(
     private_key_path: Option<&std::path::Path>,
     prompt: std::rc::Rc<std::sync::Mutex<Box<dyn keyfork_prompt::PromptHandler>>>,
 ) -> Result<(models::SendShardRequest, String), SendShardError> {
+    decrypt_selected_shard(bundle, private_key_path, prompt, None)
+}
+
+fn decrypt_selected_shard(
+    bundle: &v1::GenerateQuorumResponse,
+    private_key_path: Option<&std::path::Path>,
+    prompt: std::rc::Rc<std::sync::Mutex<Box<dyn keyfork_prompt::PromptHandler>>>,
+    holder: Option<&str>,
+) -> Result<(models::SendShardRequest, String), SendShardError> {
     use SendShardErrorKind as Kind;
     if bundle.threshold == 0
         || bundle.threshold > bundle.max
@@ -126,6 +135,7 @@ pub(crate) fn decrypt_shard(
             .iter()
             .enumerate()
             .find_map(|(index, cert)| {
+                if holder.is_some_and(|holder| cert.fingerprint().to_string() != holder) { return None; }
                 private_keys
                     .iter()
                     .find(|private| {
@@ -171,6 +181,10 @@ pub(crate) fn decrypt_shard(
         threshold,
     };
     let keyring = signing_keyring(bundle, &request, selected)?;
+    if let Some(holder) = holder {
+        let cert = sequoia_openpgp::Cert::from_bytes(keyring.as_bytes()).map_err(|_| SendShardError::invalid(Kind::NoMatchingHolderKeys))?;
+        if cert.fingerprint().to_string() != holder { return Err(SendShardError::invalid(Kind::ShareHolderMismatch)); }
+    }
     Ok((request, keyring))
 }
 
@@ -204,6 +218,16 @@ pub async fn send_shard(
     pcrs: std::collections::HashMap<u8, Vec<u8>>,
     bundle: &QuorumBundle,
     opt_private_key_path: Option<std::path::PathBuf>,
+) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
+    send_selected_shard(address, pcrs, bundle, opt_private_key_path, None).await
+}
+
+pub async fn send_selected_shard(
+    address: std::net::SocketAddr,
+    pcrs: std::collections::HashMap<u8, Vec<u8>>,
+    bundle: &QuorumBundle,
+    opt_private_key_path: Option<std::path::PathBuf>,
+    holder: Option<String>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
     use SendShardErrorKind as ErrorKind;
 
@@ -273,7 +297,7 @@ pub async fn send_shard(
     ));
     let bundle = bundle.clone().to_latest();
     let (request, keyring) =
-        decrypt_shard(&bundle, opt_private_key_path.as_deref(), temp_ph.clone())?;
+        decrypt_selected_shard(&bundle, opt_private_key_path.as_deref(), temp_ph.clone(), holder.as_deref())?;
 
     // Create the encrypted payload
     //

@@ -101,7 +101,7 @@ fn signatures_identify_one_holder_and_reject_ambiguous_identity() {
 
 #[tokio::test]
 async fn invalid_bundles_fail_before_binding() {
-    let unsupported = bundle(
+    let malformed = bundle(
         vec![v1::Key::WebAuthn {
             credential: vec![],
             cert: String::new(),
@@ -110,7 +110,7 @@ async fn invalid_bundles_fail_before_binding() {
     );
     // An occupied address ensures a BundleAccess failure precedes any bind attempt.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let error = receive_shards(listener.local_addr().unwrap(), &unsupported)
+    let error = receive_shards(listener.local_addr().unwrap(), &malformed)
         .await
         .unwrap_err();
     assert!(matches!(error.kind, ReceiveShardsErrorKind::BundleAccess));
@@ -118,7 +118,7 @@ async fn invalid_bundles_fail_before_binding() {
         std::error::Error::source(&error)
             .unwrap()
             .to_string()
-            .contains("UnsupportedWebAuthn")
+            .contains("EmptyEntry")
     );
     for threshold in [0, 2] {
         assert!(matches!(
