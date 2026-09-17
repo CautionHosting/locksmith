@@ -68,3 +68,10 @@ Platform's Keymaker address and verified PCR policy. Recover it with external PG
 plus WebAuthn. Recovery, approval retries and restarts never call Keymaker.
 Record source revisions, PCRs, bundle identifiers and results; synthetic/local
 success does not establish real Nitro acceptance.
+
+Both certificate-service image recipes include the pinned PCSC build dependency
+required by the current Locksmith dependency graph. The deployable example
+normalizes public configuration and encrypted bootstrap files to `0644`, and
+directories/start script to `0755`, before copying them into the runtime image.
+Host umask must not change the measured configuration. This does not change the
+custody root or the `/etc/caution` configuration layout.

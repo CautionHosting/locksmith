@@ -22,12 +22,15 @@ RUN --network=none <<-EOF
 		--bin public-cert-service
 EOF
 FROM build AS package
-# Normalize only the public/encrypted bootstrap inputs before measuring the image.
+# Normalize public configuration and encrypted bootstrap inputs before measurement.
 COPY .caution/quorum-bundle.json /bootstrap/bundle.json
 COPY .caution/keymaker-pcr-policy.json /bootstrap/keymaker-pcr-policy.json
 COPY .caution/secrets/CERTIFICATE_BOOTSTRAP.asc /bootstrap/secrets/CERTIFICATE_BOOTSTRAP.asc
+COPY .caution/release-config.json /bootstrap/release-config.json
+COPY .caution/release-keymaker-pcr-policy.json /bootstrap/release-keymaker-pcr-policy.json
+COPY .caution/caution-ca.asc /bootstrap/caution-ca.asc
 COPY examples/certificate-service/start.sh /bootstrap/start.sh
-RUN --network=none chmod 755 /bootstrap /bootstrap/secrets /bootstrap/start.sh && chmod 644 /bootstrap/*.json /bootstrap/secrets/*.asc
+RUN --network=none chmod 755 /bootstrap /bootstrap/secrets /bootstrap/start.sh && chmod 644 /bootstrap/*.json /bootstrap/*.asc /bootstrap/secrets/*.asc
 FROM scratch AS runtime
 COPY --from=build /target/*-unknown-linux-musl/release/public-cert-service /
 COPY --from=package /bootstrap/bundle.json /etc/caution/bundle.json
@@ -35,6 +38,6 @@ COPY --from=package /bootstrap/keymaker-pcr-policy.json /etc/caution/keymaker-pc
 COPY --from=package /bootstrap/secrets/ /etc/caution/secrets/
 COPY --from=package /bootstrap/start.sh /start-certificate-service
 
-COPY .caution/release-config.json /etc/caution/release-config.json
-COPY .caution/release-keymaker-pcr-policy.json /etc/caution/release-keymaker-pcr-policy.json
-COPY .caution/caution-ca.asc /etc/caution/caution-ca.asc
+COPY --from=package /bootstrap/release-config.json /etc/caution/release-config.json
+COPY --from=package /bootstrap/release-keymaker-pcr-policy.json /etc/caution/release-keymaker-pcr-policy.json
+COPY --from=package /bootstrap/caution-ca.asc /etc/caution/caution-ca.asc
