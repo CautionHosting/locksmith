@@ -2,7 +2,8 @@
 use crate::{custody::pgp_error, release::Error};
 use card_backend_pcsc::PcscBackend;
 use dterror::ResultExt;
-use keyfork_prompt::{PromptHandler, prompt_validated_passphrase};
+use keyfork_prompt::PromptHandler;
+use super::card_prompt::{validated_pin, METADATA, SHARE};
 use keyfork_shard::openpgp::EncryptedMessage;
 use keymaker_models::generate_quorum::v1;
 use openpgp_card_sequoia::{Card, state::Open};
@@ -34,6 +35,7 @@ struct Decryptor {
     card: Card<Open>,
     allowed: HashSet<Fingerprint>,
     signer: Option<Cert>,
+    operation: &'static str,
     prompt: Rc<Mutex<Box<dyn PromptHandler>>>,
 }
 impl VerificationHelper for &mut Decryptor {
@@ -81,9 +83,9 @@ impl DecryptionHelper for &mut Decryptor {
             .prompt
             .lock()
             .map_err(|_| anyhow::anyhow!("prompt unavailable"))?;
-        let pin = prompt_validated_passphrase(
+        let pin = validated_pin(
             &mut **prompt,
-            &format!("Unlock selected holder card {}\nPIN: ", fingerprint),
+            &format!("{operation}\nUnlock selected holder card {}\nPIN: ", fingerprint, operation = self.operation),
             3,
             &|value: String| -> Result<String, Box<dyn std::error::Error>> {
                 if value.trim().len() < 6 {
@@ -95,7 +97,8 @@ impl DecryptionHelper for &mut Decryptor {
         drop(prompt);
         // One explicit card attempt; an invalid PIN is returned rather than retried silently.
         let mut user = transaction.to_user_card(pin.trim())?;
-        let mut key = user.decryptor(&|| eprintln!("Touch the selected card to decrypt"))?;
+        let touch = || eprintln!("{} — touch the selected card to decrypt", self.operation);
+        let mut key = user.decryptor(&touch)?;
         for packet in packets {
             if packet
                 .decrypt(&mut key, algorithm)
@@ -165,6 +168,7 @@ pub(crate) fn decrypt(
                 card,
                 allowed: allowed.clone(),
                 signer: None,
+                operation: METADATA,
                 prompt,
             };
             let mut recipients = Vec::new();
@@ -202,6 +206,8 @@ pub(crate) fn decrypt(
             {
                 return Err(Error::invalid("share metadata holder order"));
             }
+            eprintln!("✓ Bundle metadata checked");
+            helper.operation = SHARE;
             helper.signer = Some(metadata_certs[0].clone());
             let share = messages[index + 1]
                 .decrypt_with(&NullPolicy::new(), &mut helper)
@@ -209,6 +215,7 @@ pub(crate) fn decrypt(
             if share.len() != 33 || usize::from(share[0]) != index + 1 {
                 return Err(Error::invalid("share coordinate"));
             }
+            eprintln!("✓ Share decrypted");
             Ok((share, bundle.threshold, index))
         },
     )

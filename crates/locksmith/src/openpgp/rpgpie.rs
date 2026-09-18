@@ -233,9 +233,9 @@ pub fn sign(
             });
         }
 
-        let pin = keyfork_prompt::prompt_validated_passphrase(
+        let pin = super::card_prompt::validated_pin(
             prompt,
-            &format!("{message_template}\nRemaining PIN entry attempts: {attempts}\n\nPIN: "),
+            &format!("{}\n{message_template}\nRemaining PIN entry attempts: {attempts}\n\nPIN: ", super::card_prompt::SIGN),
             3,
             validator,
         )
@@ -262,7 +262,9 @@ pub fn sign(
         }
     }
 
-    let cs = CardSlot::init_from_card(&mut tx, KeyType::Signing, &|| {})
+    let cs = CardSlot::init_from_card(&mut tx, KeyType::Signing, &|| {
+        eprintln!("{} — touch the selected card to sign", super::card_prompt::SIGN);
+    })
         .with_contexts((), ErrorKind::InitCardSlot)?;
     let signature = cs
         .sign_data(
@@ -276,6 +278,7 @@ pub fn sign(
     rpgpie::signature::save(&[signature], true, &mut signature_armored_bytes)
         .with_contexts((), ErrorKind::EncodeSignedData)?;
 
+    eprintln!("✓ Encrypted submission signed");
     Ok(String::from_utf8(signature_armored_bytes).expect("ASCII armored values are always utf8"))
 }
 

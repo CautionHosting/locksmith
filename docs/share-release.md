@@ -108,3 +108,34 @@ hash preferences when available, otherwise SHA-512. This permits signing with
 older certificates that omit hash preferences. To use this client-side fix,
 update Platform's pinned Locksmith revision and rebuild the CLI; existing bundles,
 the custody root and deployed services do not need replacement.
+
+## Smartcard prompt progress
+
+External-PGP card recovery labels its three operations: decrypt/check bundle
+metadata, decrypt the selected holder's share, and sign the encrypted submission
+to the destination. Each PIN and touch instruction names its operation. Completion
+is printed only after that operation succeeds; signing completion is not a share
+acceptance acknowledgement. The destination's response determines acceptance.
+
+Interactive card PIN entry stays inline with hidden input, preserving the CLI's
+application/holder/destination summary and earlier progress. It does not clear the
+screen or cache a PIN. Ctrl-C cancels and restores terminal input settings. Explicit
+headless prompting and noninteractive handling keep their existing behavior. The
+three card operations and their PIN/touch requirements are unchanged. No bundle,
+protocol or enclave redeployment is required; rebuild the consuming CLI.
+
+Regression checks: run `cargo test -p locksmith --lib`, then pass the resulting
+Locksmith test executable to
+`python3 crates/locksmith/tests/card_prompt_pty.py /path/to/locksmith-test-binary`.
+The PTY test covers hidden input, retained output and terminal restoration on
+success/cancellation. It does not validate a physical YubiKey; manually recover
+one share and confirm all three labelled operations and final acknowledgement.
+
+Local validation: Locksmith library regressions and PTY success, cancellation,
+and three-attempt PIN-format validation pass on macOS. Physical-card acceptance
+remains pending: cancel at each of the three PIN prompts and confirm that no later
+operation or submission occurs; then complete recovery and confirm the receiver
+acknowledges the share. Existing error propagation still stops metadata failure
+before share decryption, share failure before signing, and signing failure before
+network submission. These hardware failure paths were source-reviewed, not
+exercised against a physical card.
