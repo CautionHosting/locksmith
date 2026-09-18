@@ -32,8 +32,8 @@ for typed, expected in [(b"654321\n", b"PIN accepted"), (b"654\x03", b"Cancelled
                 if not chunk:
                     break
                 output.extend(chunk)
-            # Wait until echo is disabled, not merely until the prompt was printed.
-            if not sent and b"PIN: " in output and not termios.tcgetattr(fd)[3] & termios.ECHO:
+            # Send immediately on prompt detection to catch echo setup races.
+            if not sent and b"PIN: " in output:
                 os.write(fd, typed)
                 sent = True
         else:
@@ -46,6 +46,7 @@ for typed, expected in [(b"654321\n", b"PIN accepted"), (b"654\x03", b"Cancelled
         if expected == b"Validation attempts exhausted":
             assert output.count(b"PIN: ") == 3, output
         assert b"Existing release summary" in output, output
+        assert b"Decrypt bundle metadata\r\nPIN: " in output, output
         assert b"654" not in output, "PIN input was echoed"
         assert b"\x1b" not in output, "terminal clearing/control escape emitted"
         mask = termios.ECHO | termios.ICANON | termios.ISIG

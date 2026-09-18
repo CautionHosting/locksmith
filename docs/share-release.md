@@ -118,8 +118,9 @@ is printed only after that operation succeeds; signing completion is not a share
 acceptance acknowledgement. The destination's response determines acceptance.
 
 Interactive card PIN entry stays inline with hidden input, preserving the CLI's
-application/holder/destination summary and earlier progress. It does not clear the
-screen or cache a PIN. Ctrl-C cancels and restores terminal input settings. Explicit
+application/holder/destination summary and earlier progress. Echo is disabled before
+the prompt appears, protecting immediate input. It does not clear the screen or
+cache a PIN. Ctrl-C cancels and restores terminal input settings. Explicit
 headless prompting and noninteractive handling keep their existing behavior. The
 three card operations and their PIN/touch requirements are unchanged. No bundle,
 protocol or enclave redeployment is required; rebuild the consuming CLI.
@@ -127,8 +128,9 @@ protocol or enclave redeployment is required; rebuild the consuming CLI.
 Regression checks: run `cargo test -p locksmith --lib`, then pass the resulting
 Locksmith test executable to
 `python3 crates/locksmith/tests/card_prompt_pty.py /path/to/locksmith-test-binary`.
-The PTY test covers hidden input, retained output and terminal restoration on
-success/cancellation. It does not validate a physical YubiKey; manually recover
+The PTY test sends input as soon as `PIN: ` appears and covers hidden input, multiline
+prompt layout, retained output and terminal restoration on success, cancellation,
+and validation exhaustion. It does not validate a physical YubiKey; manually recover
 one share and confirm all three labelled operations and final acknowledgement.
 
 Local validation: Locksmith library regressions and PTY success, cancellation,

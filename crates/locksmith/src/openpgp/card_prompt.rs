@@ -58,10 +58,11 @@ impl Drop for RawMode {
     }
 }
 fn inline_pin(prompt: &str) -> Result<String, Error> {
-    eprint!("{prompt}");
-    io::stderr().flush()?;
     crossterm::terminal::enable_raw_mode()?;
     let guard = RawMode;
+    // Disable echo before prompting; raw mode needs explicit carriage returns.
+    eprint!("{}", prompt.replace('\n', "\r\n"));
+    io::stderr().flush()?;
     let result = rpassword::read_password_with_config(
         rpassword::ConfigBuilder::new()
             .input_reader(PinInput)
