@@ -54,6 +54,7 @@ fn fixture(uv: bool) -> (Authorizer, WebauthnAuthenticator<SoftPasskey>, Securit
         keymaker_policy: KeymakerPcrPolicy { sets: vec![] },
         ca,
         pending: Mutex::new(HashMap::new()),
+        quotas: Arc::default(),
     };
     (auth, device, credential)
 }
@@ -85,9 +86,13 @@ fn ready(auth: &Authorizer, credential: &SecurityKey) -> (String, RequestChallen
         shardfile: String::new(),
         public_key: String::new(),
     };
+    let reservation = auth
+        .reserve(&session, &context, Instant::now() + TTL)
+        .unwrap();
     auth.pending.lock().unwrap().insert(
         session.clone(),
         Pending {
+            _reservation: reservation,
             deadline: Instant::now() + TTL,
             context,
             bundle,
@@ -544,11 +549,113 @@ fn certificate_context_requires_the_expected_ca_bundle_and_index() {
     let cert = make(false);
     let at = SystemTime::now();
     assert_eq!(
-        certified_context(&cert, &ca.clone().strip_secret_key_material(), [1; 16], 0, at).unwrap(),
+        certified_context(
+            &cert,
+            &ca.clone().strip_secret_key_material(),
+            [1; 16],
+            0,
+            at
+        )
+        .unwrap(),
         [2; 16]
     );
-    assert!(certified_context(&cert, &other_ca.strip_secret_key_material(), [1; 16], 0, at).is_err());
-    assert!(certified_context(&cert, &ca.clone().strip_secret_key_material(), [3; 16], 0, at).is_err());
-    assert!(certified_context(&cert, &ca.clone().strip_secret_key_material(), [1; 16], 1, at).is_err());
-    assert!(certified_context(&make(true), &ca.clone().strip_secret_key_material(), [1; 16], 0, at).is_err());
+    assert!(
+        certified_context(&cert, &other_ca.strip_secret_key_material(), [1; 16], 0, at).is_err()
+    );
+    assert!(
+        certified_context(
+            &cert,
+            &ca.clone().strip_secret_key_material(),
+            [3; 16],
+            0,
+            at
+        )
+        .is_err()
+    );
+    assert!(
+        certified_context(
+            &cert,
+            &ca.clone().strip_secret_key_material(),
+            [1; 16],
+            1,
+            at
+        )
+        .is_err()
+    );
+    assert!(
+        certified_context(
+            &make(true),
+            &ca.clone().strip_secret_key_material(),
+            [1; 16],
+            0,
+            at
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn reservations_limit_bundles_and_global_capacity_including_in_flight_sessions() {
+    let (auth, _, credential) = fixture(true);
+    let (session, _) = ready(&auth, &credential);
+    let in_flight = auth.take(&session).unwrap();
+    let context = in_flight.context.clone();
+    let mut held = Vec::new();
+    for _ in 1..BUNDLE_CAPACITY {
+        held.push(
+            auth.reserve(&random_nonce(), &context, Instant::now() + TTL)
+                .unwrap(),
+        );
+    }
+    assert!(
+        auth.reserve(&random_nonce(), &context, Instant::now() + TTL)
+            .err()
+            .unwrap()
+            .is_busy()
+    );
+    drop(in_flight);
+    held.push(
+        auth.reserve(&random_nonce(), &context, Instant::now() + TTL)
+            .unwrap(),
+    );
+    for n in 1..=(CAPACITY - BUNDLE_CAPACITY) {
+        let mut other = context.clone();
+        other.bundle_id = [n as u8 + 1; 16];
+        held.push(
+            auth.reserve(&random_nonce(), &other, Instant::now() + TTL)
+                .unwrap(),
+        );
+    }
+    let mut other = context.clone();
+    other.bundle_id = [255; 16];
+    assert!(
+        auth.reserve(&random_nonce(), &other, Instant::now() + TTL)
+            .is_err()
+    );
+    drop(held);
+    assert!(auth.quotas.lock().unwrap().is_empty());
+    let expired = auth
+        .reserve(
+            &random_nonce(),
+            &context,
+            Instant::now() - Duration::from_secs(1),
+        )
+        .unwrap();
+    let fresh = auth
+        .reserve(&random_nonce(), &context, Instant::now() + TTL)
+        .unwrap();
+    assert_eq!(auth.quotas.lock().unwrap().len(), 1);
+    drop((expired, fresh));
+    assert!(auth.quotas.lock().unwrap().is_empty());
+    let (session, _) = ready(&auth, &credential);
+    assert!(
+        auth.prepare(PrepareRequest {
+            version: Version::V1,
+            session_id: session,
+            destination_attestation: vec![],
+            client_nonce: random_nonce()
+        })
+        .is_err()
+    );
+    assert!(auth.quotas.lock().unwrap().is_empty());
 }

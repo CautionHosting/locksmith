@@ -17,13 +17,14 @@ use serde_cbor::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
 };
 use webauthn_rs::{Webauthn, WebauthnBuilder, prelude::*};
 
 pub const TTL: Duration = Duration::from_secs(180);
 const CAPACITY: usize = 64;
+const BUNDLE_CAPACITY: usize = 8;
 const ORG: &str = "organization-id@caution.co";
 const BUNDLE: &str = "bundle-id@caution.co";
 
@@ -52,6 +53,10 @@ impl FromContexts for Error {
     }
 }
 impl Error {
+    pub fn is_busy(&self) -> bool {
+        self.kind == "pending release capacity reached"
+    }
+
     #[track_caller]
     pub fn invalid(kind: &'static str) -> Self {
         Self {
@@ -190,7 +195,20 @@ pub(crate) fn generate_live(data: &[u8], nonce: &str) -> Result<Vec<u8>, Error> 
         })
 }
 
+type Quotas = Arc<Mutex<HashMap<String, (([u8; 16], [u8; 16]), Instant)>>>;
+struct Reservation {
+    quotas: Quotas,
+    session: String,
+}
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if let Ok(mut quotas) = self.quotas.lock() {
+            quotas.remove(&self.session);
+        }
+    }
+}
 struct Pending {
+    _reservation: Reservation,
     deadline: Instant,
     context: Context,
     bundle: v1::GenerateQuorumResponse,
@@ -203,6 +221,7 @@ pub struct Authorizer {
     keymaker_policy: KeymakerPcrPolicy,
     ca: Cert,
     pending: Mutex<HashMap<String, Pending>>,
+    quotas: Quotas,
 }
 impl Authorizer {
     pub fn new(
@@ -236,6 +255,38 @@ impl Authorizer {
             keymaker_policy,
             ca,
             pending: Mutex::new(HashMap::new()),
+            quotas: Arc::default(),
+        })
+    }
+    fn reserve(
+        &self,
+        session: &str,
+        context: &Context,
+        deadline: Instant,
+    ) -> Result<Reservation, Error> {
+        self.pending
+            .lock()
+            .map_err(|_| Error::invalid("authorization store unavailable"))?
+            .retain(|_, p| p.deadline > Instant::now());
+        let mut quotas = self
+            .quotas
+            .lock()
+            .map_err(|_| Error::invalid("authorization store unavailable"))?;
+        quotas.retain(|_, (_, expiry)| *expiry > Instant::now());
+        let identity = (context.organization_id, context.bundle_id);
+        if quotas.len() >= CAPACITY
+            || quotas
+                .values()
+                .filter(|(bundle, _)| *bundle == identity)
+                .count()
+                >= BUNDLE_CAPACITY
+        {
+            return Err(Error::invalid("pending release capacity reached"));
+        }
+        quotas.insert(session.to_owned(), (identity, deadline));
+        Ok(Reservation {
+            quotas: self.quotas.clone(),
+            session: session.to_owned(),
         })
     }
     pub fn begin(&self, request: BeginRequest) -> Result<Attested<Begun>, Error> {
@@ -326,6 +377,7 @@ impl Authorizer {
             expires_at_unix_seconds,
         };
         let session_id = random_nonce();
+        let reservation = self.reserve(&session_id, &context, deadline)?;
         let response = attest(
             Begun {
                 request_hash,
@@ -338,13 +390,13 @@ impl Authorizer {
             .pending
             .lock()
             .map_err(|_| Error::invalid("authorization store unavailable"))?;
-        pending.retain(|_, p| p.deadline > Instant::now());
-        if pending.len() >= CAPACITY {
-            return Err(Error::invalid("pending release capacity reached"));
+        if deadline <= Instant::now() {
+            return Err(Error::invalid("release expired"));
         }
         pending.insert(
             session_id,
             Pending {
+                _reservation: reservation,
                 deadline,
                 context,
                 bundle,
@@ -387,8 +439,8 @@ impl Authorizer {
             .pending
             .lock()
             .map_err(|_| Error::invalid("authorization store unavailable"))?;
-        if state.deadline <= Instant::now() || pending.len() >= CAPACITY {
-            return Err(Error::invalid("release expired or capacity reached"));
+        if state.deadline <= Instant::now() {
+            return Err(Error::invalid("release expired"));
         }
         pending.insert(request.session_id, state);
         Ok(response)
@@ -452,7 +504,10 @@ fn certified_context(
         )
     })?;
     valid.alive().map_err(crate::custody::pgp_error)?;
-    if matches!(valid.revocation_status(), sequoia_openpgp::types::RevocationStatus::Revoked(_)) {
+    if matches!(
+        valid.revocation_status(),
+        sequoia_openpgp::types::RevocationStatus::Revoked(_)
+    ) {
         return Err(Error::invalid("revoked holder certificate"));
     }
     let expected = format!("Caution public certificate index={index}");

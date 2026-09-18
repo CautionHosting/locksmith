@@ -8,7 +8,7 @@ It does not implement production root management or close #7/#10/#11/#12.
 ## Prepare the existing deployment checkout
 
 Use the existing certificate-service deployment worktree. Preserve its root
-bundle, Keymaker policy, encrypted bootstrap marker and public CA. Do not create
+bundle, Keymaker policy, encrypted issuance token and public CA. Do not create
 a new root for this upgrade. The example folder is not a standalone repository:
 Caution builds the whole Locksmith checkout using the root `caution.hcl`.
 
@@ -23,7 +23,7 @@ Configure the exact registered Platform RP ID and HTTPS origin. Required inputs:
 | --- | --- |
 | `.caution/quorum-bundle.json` | Existing external-PGP root quorum, proofed V1 envelope |
 | `.caution/keymaker-pcr-policy.json` | Independently verified policy for that root bundle |
-| `.caution/secrets/CERTIFICATE_BOOTSTRAP.asc` | Existing encrypted `certificate-service-bootstrap-v1` startup marker |
+| `.caution/secrets/PUBLIC_CERTIFICATE_SERVICE_TOKEN.asc` | Encrypted 32-byte hex issuance token, shared with Platform |
 | `.caution/caution-ca.asc` | Public CA from the verified root bundle |
 | `.caution/release-config.json` | RP/origin and paths to measured verifier inputs |
 | `.caution/release-keymaker-pcr-policy.json` | Independently verified Keymaker policies for application bundles to recover |
@@ -39,7 +39,7 @@ python3 examples/certificate-service/check-inputs.py
 Preflight checks packaging; CLI and runtime still verify cryptographic proofs.
 The root must be externally recoverable without this service. If starting a
 completely new disposable test, first create an external-PGP root quorum and
-encrypt the marker using `caution secret encrypt CERTIFICATE_BOOTSTRAP`; each new
+encrypt the token using `caution secret encrypt PUBLIC_CERTIFICATE_SERVICE_TOKEN`; each new
 quorum consumes **one fresh Keymaker**. An existing-root upgrade consumes none.
 
 ## Automated gate and manual acceptance
@@ -55,12 +55,16 @@ docker build --target build -f examples/certificate-service/Containerfile .
 After the gate passes, deploy the updated service from this checkout and unlock
 it with the existing external-PGP root holders. Record the new non-debug PCRs;
 configure those independently verified measurements in the CLI's recryptor
-policy and Platform's certificate-service policy. Endpoints remain public for
-this milestone; access restrictions are deferred. Public certificate issuance
-is not permission to release a share.
+policy and Platform's certificate-service policy. Release routes remain public. Certificate issuance requires the shared bearer token;
+it is not permission to release a share. See [migration and acceptance](../../docs/service-hardening.md).
+
+The encrypted token replaces the old fixed bootstrap marker: its `env::vault`
+reference still enables Locksmith and gates application startup on root recovery.
+The token is not the custody root and cannot replace the external-PGP quorum.
 
 Startup verifies the configured CA against the recovered Keyfork root before
-serving. `/health` returns 503 if that root cannot be used or does not match.
+serving. `/health` caches success and failure for two seconds and returns 503 if that root
+cannot be used or does not match. Concurrent checks share one refresh.
 Certificate generation admits one blocking worker with a 60-second request budget,
 including Keyfork I/O; busy requests return 503. Timed-out workers retain their
 slot until they finish. Restarting only HTTP preserves Keyfork; an enclave restart

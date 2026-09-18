@@ -6,6 +6,7 @@
 //! deterministic Keyfork derivation path construction, and OpenPGP certificate
 //! derivation used by v1 public certificate bundles.
 
+mod admission;
 pub mod derivation;
 pub mod release;
 pub mod routes;
@@ -24,6 +25,9 @@ pub struct AppState {
     pub release: Option<Arc<locksmith::release::Authorizer>>,
     pub expected_ca: Option<sequoia_openpgp::Cert>,
     generation: Arc<tokio::sync::Semaphore>,
+    release_workers: Arc<tokio::sync::Semaphore>,
+    readiness: Arc<admission::Readiness>,
+    issuance_token: Option<String>,
 }
 
 impl Default for AppState {
@@ -32,6 +36,9 @@ impl Default for AppState {
             release: None,
             expected_ca: None,
             generation: Arc::new(tokio::sync::Semaphore::new(1)),
+            release_workers: Arc::new(tokio::sync::Semaphore::new(4)),
+            readiness: Arc::new(admission::Readiness::default()),
+            issuance_token: None,
         }
     }
 }
@@ -40,6 +47,22 @@ impl AppState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Configure issuance separately from public recovery; invalid configuration fails closed.
+    pub fn set_issuance_token(&mut self, token: Option<String>) {
+        self.issuance_token =
+            token.filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    pub async fn ready(&self) -> bool {
+        let expected = self.expected_ca.clone();
+        let deadline = std::time::Instant::now() + service::REQUEST_BUDGET;
+        self.readiness
+            .check(deadline, move || {
+                service::check_root(expected.as_ref(), deadline).is_ok()
+            })
+            .await
     }
 
     pub async fn check_ready(&self) -> Result<(), service::Error> {
@@ -96,7 +119,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(routes::health))
         .route(
             "/v1/public-certificates",
-            post(routes::derive_public_certificates),
+            post(routes::derive_public_certificates).route_layer(
+                axum::middleware::from_fn_with_state(state.clone(), admission::authenticate),
+            ),
         )
         .layer(DefaultBodyLimit::max(4096))
         .route(

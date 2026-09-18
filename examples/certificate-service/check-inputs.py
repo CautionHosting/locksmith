@@ -33,9 +33,9 @@ try:
     json.loads((root / ".caution/release-keymaker-pcr-policy.json").read_text())["sets"]
     if not (root / ".caution/caution-ca.asc").read_text().startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----"):
         raise ValueError("public Caution CA certificate is missing")
-    marker = root / ".caution/secrets/CERTIFICATE_BOOTSTRAP.asc"
-    if not marker.read_text().startswith("-----BEGIN PGP MESSAGE-----"):
-        raise ValueError("encrypted bootstrap marker is missing")
+    token = root / ".caution/secrets/PUBLIC_CERTIFICATE_SERVICE_TOKEN.asc"
+    if not token.is_file() or not token.read_text().startswith("-----BEGIN PGP MESSAGE-----"):
+        raise ValueError("encrypted issuance token is missing")
 except (OSError, ValueError, KeyError, TypeError) as error:
     sys.exit(f"Bootstrap input check failed: {error}")
 print("Packaging inputs present; cryptographic verification still required by CLI/runtime.")

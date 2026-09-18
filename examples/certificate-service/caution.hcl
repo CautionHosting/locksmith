@@ -18,7 +18,7 @@ enclave "default" {
   unit "default" {
     command = "/start-certificate-service"
     env = {
-      CERTIFICATE_BOOTSTRAP = env::vault("CERTIFICATE_BOOTSTRAP")
+      PUBLIC_CERTIFICATE_SERVICE_TOKEN = env::vault("PUBLIC_CERTIFICATE_SERVICE_TOKEN")
     }
   }
 }

@@ -11,7 +11,7 @@ use public_certificate_models::{PublicCertificateRequest, PublicCertificateRespo
 use serde_json::json;
 
 pub async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<serde_json::Value>) {
-    let ready = state.check_ready().await.is_ok();
+    let ready = state.ready().await;
     (
         if ready {
             StatusCode::OK
@@ -52,7 +52,9 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_certificate_count_is_rejected_by_the_typed_request_boundary() {
-        let app = crate::router(Arc::new(AppState::new()));
+        let mut state = AppState::new();
+        state.set_issuance_token(Some("ab".repeat(32)));
+        let app = crate::router(Arc::new(state));
         let request = json!({
             "version": "V1",
             "organization_id": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -63,6 +65,7 @@ mod tests {
             .oneshot(
                 Request::post("/v1/public-certificates")
                     .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", "ab".repeat(32)))
                     .body(Body::from(request.to_string()))
                     .unwrap(),
             )
@@ -74,7 +77,9 @@ mod tests {
 
     #[tokio::test]
     async fn uuid_strings_are_rejected_by_the_typed_request_boundary() {
-        let app = crate::router(Arc::new(AppState::new()));
+        let mut state = AppState::new();
+        state.set_issuance_token(Some("ab".repeat(32)));
+        let app = crate::router(Arc::new(state));
         let request = json!({
             "version": "V1",
             "organization_id": "00000000-0000-0000-0000-000000000001",
@@ -85,6 +90,7 @@ mod tests {
             .oneshot(
                 Request::post("/v1/public-certificates")
                     .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", "ab".repeat(32)))
                     .body(Body::from(request.to_string()))
                     .unwrap(),
             )
@@ -96,7 +102,9 @@ mod tests {
 
     #[tokio::test]
     async fn client_supplied_bundle_id_is_rejected_by_the_typed_request_boundary() {
-        let app = crate::router(Arc::new(AppState::new()));
+        let mut state = AppState::new();
+        state.set_issuance_token(Some("ab".repeat(32)));
+        let app = crate::router(Arc::new(state));
         let request = json!({
             "version": "V1",
             "organization_id": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -108,6 +116,7 @@ mod tests {
             .oneshot(
                 Request::post("/v1/public-certificates")
                     .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", "ab".repeat(32)))
                     .body(Body::from(request.to_string()))
                     .unwrap(),
             )
@@ -119,7 +128,9 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_request_bodies_are_rejected_before_derivation() {
-        let app = crate::router(Arc::new(AppState::new()));
+        let mut state = AppState::new();
+        state.set_issuance_token(Some("ab".repeat(32)));
+        let app = crate::router(Arc::new(state));
         let oversized_body = format!(
             "{{\"version\":\"V1\",\"organization_id\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],\"bundle_id\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],\"certificate_count\":1,\"padding\":\"{}\"}}",
             "x".repeat(4097)
@@ -129,6 +140,7 @@ mod tests {
             .oneshot(
                 Request::post("/v1/public-certificates")
                     .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", "ab".repeat(32)))
                     .body(Body::from(oversized_body))
                     .unwrap(),
             )

@@ -29,6 +29,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         state.release = Some(Arc::new(authorizer));
         state.expected_ca = Some(ca);
     }
+    state.set_issuance_token(std::env::var("PUBLIC_CERTIFICATE_SERVICE_TOKEN").ok());
     state.check_ready().await?;
 
     let listen_addr =

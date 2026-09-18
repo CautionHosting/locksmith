@@ -15,11 +15,14 @@ async fn post<T: serde::Serialize, R: serde::de::DeserializeOwned>(
     path: &str,
     value: &T,
 ) -> R {
+    let mut request = Request::post(path).header("content-type", "application/json");
+    if path == "/v1/public-certificates" {
+        request = request.header("authorization", format!("Bearer {}", "ab".repeat(32)));
+    }
     let response = app
         .clone()
         .oneshot(
-            Request::post(path)
-                .header("content-type", "application/json")
+            request
                 .body(Body::from(serde_json::to_vec(value).unwrap()))
                 .unwrap(),
         )
@@ -193,12 +196,22 @@ fn custody_http_and_destination_recover_mixed_quorum() {
             let auth = Authorizer::new("example.com", origin.as_str(), policy, ca).unwrap();
             let app = crate::router(Arc::new(AppState {
                 release: Some(Arc::new(auth)),
+                issuance_token: Some("ab".repeat(32)),
                 ..AppState::new()
             }));
             tokio::runtime::Runtime::new()
                 .unwrap()
                 .block_on(async move {
                     tokio::time::timeout(std::time::Duration::from_secs(20), async move {
+                        let issued: public_certificate_models::PublicCertificateResponse = post(
+                            &app,
+                            "/v1/public-certificates",
+                            &serde_json::json!({
+                                "version":"V1", "organization_id":vec![2; 16], "certificate_count":1
+                            }),
+                        )
+                        .await;
+                        assert_eq!(issued.data.to_latest().certificates.len(), 1);
                         let measurements = Measurements::from([
                             (0, "ab".repeat(48)),
                             (1, "ab".repeat(48)),
@@ -265,7 +278,8 @@ fn custody_http_and_destination_recover_mixed_quorum() {
                         eprintln!("complete release");
                         let encrypted: SendSignedEncryptedShardRequest =
                             post(&app, "/v1/releases/complete", &request).await;
-                        crypto::verify_request(&derived, &encrypted, std::time::SystemTime::now()).unwrap();
+                        crypto::verify_request(&derived, &encrypted, std::time::SystemTime::now())
+                            .unwrap();
                         assert!(matches!(
                             destination.send(encrypted).await.unwrap(),
                             locksmith::models::SendSignedEncryptedShardResponse::Accepted {

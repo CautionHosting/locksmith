@@ -17,8 +17,9 @@ Responses attest the exact request hash, context and WebAuthn options under a fr
 CLI nonce. The CLI independently verifies both enclaves. Usernames have no role
 in release authorization.
 
-Pending state stays in the enclave, with a three-minute lifetime and 64-entry
-limit. Complete atomically consumes the state before verifying the raw WebAuthn
+Pending state stays in the enclave, with a three-minute lifetime, 64-entry global
+limit and eight entries per authenticated organization/bundle. Reservations remain
+counted while preparation runs; overload returns 503. Complete atomically consumes the state before verifying the raw WebAuthn
 assertion, requires verified UV, then derives only the selected private key.
 Failed and concurrent attempts cannot reuse authorization. Restart invalidates
 pending requests. Multiple passkeys on a holder authorize the same share.
@@ -30,15 +31,23 @@ it does not require generating a new bundle or calling Keymaker.
 
 Before binding its listener, the service derives the root CA from Keyfork and
 checks its fingerprint against the CA in `CAUTION_RELEASE_CONFIG`, when configured.
-`GET /health` repeats that check on demand and returns 503 when Keyfork is unusable
-or the CA mismatches. No background health monitor is installed.
+`GET /health` repeats that check on demand, caching success and failure for two
+seconds and coalescing concurrent refreshes. It returns 503 when Keyfork is unusable
+or the CA mismatches. A disconnected or timed-out caller does not end a refresh. No background health monitor is installed.
 
 Certificate generation runs on a blocking worker, with one operation admitted at
 a time. Busy/unavailable operations return 503. The 60-second request budget covers
 derivation, Keyfork socket I/O and proof generation; a timeout or disconnected
-caller does not free the slot until its worker finishes. Release scheduling is
-unchanged. Endpoints remain public for now; certificate issuance does not authorize
-share release.
+caller does not free the slot until its worker finishes. Release routes share four blocking-worker permits, acquired before scheduling,
+with the same 60-second request budget and bounded Keyfork I/O. Those permits stay
+held until workers finish even after timeout or disconnect.
+
+Certificate issuance requires `PUBLIC_CERTIFICATE_SERVICE_TOKEN` as a bearer token
+before request-body processing (401 if absent/incorrect; 503 if the service token
+is not configured). Release routes remain public and WebAuthn-authorized. Missing
+issuance configuration does not disable recovery in a running service. The example
+deployment requires the encrypted token as a startup input.
+See [migration and validation](service-hardening.md).
 
 Recryption checks the shardfile's threshold, holder order, signature and share
 coordinate. Plaintext and derived private keys stay in the custody enclave.
@@ -69,7 +78,7 @@ reconstruction. No Keymaker or deployed service is used.
 ## Status
 
 The minimal V1 completion increment covers these tests, readiness and bounded
-certificate generation. Legacy compatibility, dashboard creation, endpoint access
+certificate generation. Legacy compatibility, dashboard creation, further endpoint access
 restrictions and the shared structure-hash registry remain deferred. It does not
 close every requirement under #7, #383 or #384. See
 [the validation record](minimal-v1-validation.md) for this increment's evidence.

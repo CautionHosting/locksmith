@@ -52,6 +52,12 @@ fn unavailable() -> (StatusCode, &'static str) {
     )
 }
 fn rejected(error: Error) -> (StatusCode, &'static str) {
+    if error.is_busy() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "pending release capacity reached",
+        );
+    }
     tracing::warn!(%error, "share release rejected");
     (
         StatusCode::FORBIDDEN,
@@ -63,40 +69,42 @@ pub async fn begin(
     Json(request): Json<BeginRequest>,
 ) -> Result<Json<Attested<Begun>>, (StatusCode, &'static str)> {
     let auth = state.release.as_ref().ok_or_else(unavailable)?.clone();
-    tokio::task::spawn_blocking(move || auth.begin(request))
-        .await
-        .map_err(|_| unavailable())?
-        .map(Json)
-        .map_err(rejected)
+    execute(
+        &state,
+        std::time::Instant::now() + crate::service::REQUEST_BUDGET,
+        move || auth.begin(request),
+    )
+    .await
+    .map(Json)
 }
 pub async fn prepare(
     State(state): State<Arc<AppState>>,
     Json(request): Json<PrepareRequest>,
 ) -> Result<Json<Attested<Prepared>>, (StatusCode, &'static str)> {
     let auth = state.release.as_ref().ok_or_else(unavailable)?.clone();
-    tokio::task::spawn_blocking(move || auth.prepare(request))
-        .await
-        .map_err(|_| unavailable())?
-        .map(Json)
-        .map_err(rejected)
+    execute(
+        &state,
+        std::time::Instant::now() + crate::service::REQUEST_BUDGET,
+        move || auth.prepare(request),
+    )
+    .await
+    .map(Json)
 }
 pub async fn complete(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CompleteRequest>,
 ) -> Result<Json<SendSignedEncryptedShardRequest>, (StatusCode, &'static str)> {
     let auth = state.release.as_ref().ok_or_else(unavailable)?.clone();
-    tokio::task::spawn_blocking(move || {
+    let deadline = std::time::Instant::now() + crate::service::REQUEST_BUDGET;
+    execute(&state, deadline, move || {
         auth.complete(request, |context, bundle, destination| {
             use dterror::ResultExt;
-            let mut client = keyforkd_client::Client::discover_socket()
-                .with_contexts((), "connect custody root")?;
             let path = derivation::certificate_path(
                 context.organization_id,
                 context.bundle_id,
                 context.certificate_index,
             );
-            let key = client
-                .request_xprv::<keyfork_derive_openpgp::XPrvKey>(&path)
+            let key = crate::service::derive_key(&path, deadline)
                 .with_contexts((), "derive selected holder key")?;
             let private = keyfork_derive_openpgp::derive(
                 &key,
@@ -108,11 +116,40 @@ pub async fn complete(
         })
     })
     .await
-    .map_err(|_| unavailable())?
     .map(Json)
-    .map_err(rejected)
+}
+
+async fn execute<T: Send + 'static>(
+    state: &AppState,
+    deadline: std::time::Instant,
+    work: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, (StatusCode, &'static str)> {
+    const UNAVAILABLE: (StatusCode, &str) = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "share recovery unavailable",
+    );
+    let permit = state
+        .release_workers
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "share recovery busy"))?;
+    let worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        crate::service::remaining(deadline).map_err(|_| UNAVAILABLE)?;
+        let result = work().map_err(rejected)?;
+        crate::service::remaining(deadline).map_err(|_| UNAVAILABLE)?;
+        Ok(result)
+    });
+    tokio::time::timeout_at(deadline.into(), worker)
+        .await
+        .map_err(|_| UNAVAILABLE)?
+        .map_err(|_| UNAVAILABLE)?
 }
 
 #[cfg(all(test, feature = "unsafe-e2e"))]
 #[path = "release_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "release_admission_tests.rs"]
+mod admission_tests;

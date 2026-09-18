@@ -25,7 +25,7 @@ FROM build AS package
 # Normalize public configuration and encrypted bootstrap inputs before measurement.
 COPY .caution/quorum-bundle.json /bootstrap/bundle.json
 COPY .caution/keymaker-pcr-policy.json /bootstrap/keymaker-pcr-policy.json
-COPY .caution/secrets/CERTIFICATE_BOOTSTRAP.asc /bootstrap/secrets/CERTIFICATE_BOOTSTRAP.asc
+COPY .caution/secrets/PUBLIC_CERTIFICATE_SERVICE_TOKEN.asc /bootstrap/secrets/PUBLIC_CERTIFICATE_SERVICE_TOKEN.asc
 COPY .caution/release-config.json /bootstrap/release-config.json
 COPY .caution/release-keymaker-pcr-policy.json /bootstrap/release-keymaker-pcr-policy.json
 COPY .caution/caution-ca.asc /bootstrap/caution-ca.asc
