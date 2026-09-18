@@ -1,5 +1,5 @@
 use bootproof::format::{Format as _, nitro::Nitro};
-use keyfork_derive_openpgp::{XPrvKey, openpgp};
+use keyfork_derive_openpgp::openpgp;
 use keyfork_derive_path_data::paths;
 use keyfork_derive_util::{DerivationIndex, DerivationPath};
 use openpgp::{
@@ -9,6 +9,7 @@ use openpgp::{
 };
 use public_certificate_models::{Proofed, PublicCertificateBundle, PublicCertificateResponse, v1};
 use sha2::{Digest as _, Sha256};
+use std::time::Instant;
 
 /// ASCII namespace component for Caution Keymaker-derived OpenPGP certificates.
 pub const KEYMAKER_NAMESPACE: u32 = u32::from_be_bytes(*b"kmkr");
@@ -117,6 +118,8 @@ pub enum DeterministicBundleHashError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DerivePublicCertificateError {
+    #[error("custody root unavailable")]
+    Unavailable(#[source] crate::service::Error),
     #[error("failed to connect to keyforkd")]
     ConnectKeyforkd(#[source] keyforkd_client::Error),
 
@@ -237,23 +240,35 @@ pub fn derive_public_certificate(
     request: v1::PublicCertificateRequest,
     bundle_id: [u8; 16],
 ) -> Result<PublicCertificateResponse, DerivePublicCertificateError> {
-    let mut client = keyforkd_client::Client::discover_socket()
-        .map_err(DerivePublicCertificateError::ConnectKeyforkd)?;
-    let ca_xprv = client
-        .request_xprv::<XPrvKey>(&default_openpgp_ca_path())
-        .map_err(DerivePublicCertificateError::RequestDefaultCaKey)?;
+    derive_public_certificate_until(
+        request,
+        bundle_id,
+        None,
+        Instant::now() + crate::service::REQUEST_BUDGET,
+    )
+}
+
+pub(crate) fn derive_public_certificate_until(
+    request: v1::PublicCertificateRequest,
+    bundle_id: [u8; 16],
+    expected_ca: Option<&Cert>,
+    deadline: Instant,
+) -> Result<PublicCertificateResponse, DerivePublicCertificateError> {
+    let ca_cert =
+        crate::service::root_ca(deadline).map_err(DerivePublicCertificateError::Unavailable)?;
+    if expected_ca.is_some_and(|expected| expected.fingerprint() != ca_cert.fingerprint()) {
+        return Err(DerivePublicCertificateError::Unavailable(
+            crate::service::Error::unavailable("configured CA does not match custody root"),
+        ));
+    }
     let key_flags = public_certificate_key_flags();
-    let ca_userid = UserID::from("Caution default OpenPGP CA");
-    let ca_cert = keyfork_derive_openpgp::derive(&ca_xprv, &key_flags, &ca_userid)
-        .map_err(DerivePublicCertificateError::DeriveDefaultCaCertificate)?;
 
     let mut certificates = Vec::with_capacity(usize::from(request.certificate_count.get()));
 
     for index in 0..request.certificate_count.get() {
         let path = certificate_path(request.organization_id, bundle_id, index);
-        let derived_xprv = client
-            .request_xprv::<XPrvKey>(&path)
-            .map_err(DerivePublicCertificateError::RequestDerivedKey)?;
+        let derived_xprv = crate::service::derive_key(&path, deadline)
+            .map_err(DerivePublicCertificateError::Unavailable)?;
         let userid = public_certificate_userid(index);
         let cert = keyfork_derive_openpgp::derive(&derived_xprv, &key_flags, &userid)
             .map_err(DerivePublicCertificateError::DeriveOpenPgpCertificate)?;
@@ -278,7 +293,9 @@ pub fn derive_public_certificate(
     });
     let bundle_hash =
         deterministic_bundle_hash(&data).map_err(DerivePublicCertificateError::HashBundle)?;
+    crate::service::remaining(deadline).map_err(DerivePublicCertificateError::Unavailable)?;
     let necroproof = generate_necroproof(&bundle_hash)?;
+    crate::service::remaining(deadline).map_err(DerivePublicCertificateError::Unavailable)?;
 
     Ok(Proofed { data, necroproof })
 }

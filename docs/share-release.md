@@ -23,6 +23,23 @@ assertion, requires verified UV, then derives only the selected private key.
 Failed and concurrent attempts cannot reuse authorization. Restart invalidates
 pending requests. Multiple passkeys on a holder authorize the same share.
 
+The custody root lives in Keyfork for the enclave's lifetime. Restarting only the
+HTTP process invalidates pending approvals but retains that root. Restarting the
+enclave requires fresh external-PGP quorum recovery of the existing root bundle;
+it does not require generating a new bundle or calling Keymaker.
+
+Before binding its listener, the service derives the root CA from Keyfork and
+checks its fingerprint against the CA in `CAUTION_RELEASE_CONFIG`, when configured.
+`GET /health` repeats that check on demand and returns 503 when Keyfork is unusable
+or the CA mismatches. No background health monitor is installed.
+
+Certificate generation runs on a blocking worker, with one operation admitted at
+a time. Busy/unavailable operations return 503. The 60-second request budget covers
+derivation, Keyfork socket I/O and proof generation; a timeout or disconnected
+caller does not free the slot until its worker finishes. Release scheduling is
+unchanged. Endpoints remain public for now; certificate issuance does not authorize
+share release.
+
 Recryption checks the shardfile's threshold, holder order, signature and share
 coordinate. Plaintext and derived private keys stay in the custody enclave.
 The response is the unchanged Locksmith holder-signed X25519/HKDF/AES-GCM
@@ -37,6 +54,12 @@ passkey. Synthetic evidence additionally requires the exact three nonzero `ab`
 PCRs (48 bytes each). Default builds reject it even with the flag set. These tests
 are not Nitro or real-device evidence.
 
+The default release tests also verify freshness using the AWS-signed attestation
+fixture at fixed clocks. The synthetic mixed-recovery test rejects destination
+evidence reused under another authorization session's transport nonce.
+`cargo test -p public-cert-service --lib` checks readiness, CA mismatch, unavailable
+and stalled Keyfork, and generation admission after timeout or cancellation.
+
 `CAUTION_UNSAFE_KEY_SERVICE_E2E=1 cargo test -p public-cert-service --lib --features unsafe-e2e release::tests`
 runs the actual custody HTTP handlers and Locksmith TCP receiver with the same
 test Keyforkd root: WebAuthn-only and mixed recovery, below-threshold locking,
@@ -45,13 +68,15 @@ reconstruction. No Keymaker or deployed service is used.
 
 ## Status
 
-Local authorization/HTTP recovery tests and production StageX custody/runtime
-builds pass. Platform integration tests, virtual-browser approval and its API
-StageX build also pass with a temporary source override. Final immutable
-dependency/runtime pins and the consolidated real Nitro test remain pending.
-Do not deploy until those pins and the automated acceptance gate are complete. V0/earlier-V1
-compatibility, credential rotation, multi-instance state and production root
-management remain separate work; #7/#10/#11/#12 are not closed by this change.
+The minimal V1 completion increment covers these tests, readiness and bounded
+certificate generation. Legacy compatibility, dashboard creation, endpoint access
+restrictions and the shared structure-hash registry remain deferred. It does not
+close every requirement under #7, #383 or #384. See
+[the validation record](minimal-v1-validation.md) for this increment's evidence.
+
+Acceptance applies to the exact revisions and measurements in that record.
+Credential rotation, multi-instance state and production root management remain
+separate work; #7/#10/#11/#12 are not closed by this change.
 
 ## Durable custody identities
 

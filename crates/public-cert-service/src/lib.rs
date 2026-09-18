@@ -9,6 +9,7 @@
 pub mod derivation;
 pub mod release;
 pub mod routes;
+mod service;
 
 use std::sync::Arc;
 
@@ -19,15 +20,74 @@ use axum::{
 };
 use tower_http::trace::TraceLayer;
 
-#[derive(Default)]
 pub struct AppState {
     pub release: Option<Arc<locksmith::release::Authorizer>>,
+    pub expected_ca: Option<sequoia_openpgp::Cert>,
+    generation: Arc<tokio::sync::Semaphore>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            release: None,
+            expected_ca: None,
+            generation: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
 }
 
 impl AppState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub async fn check_ready(&self) -> Result<(), service::Error> {
+        let expected = self.expected_ca.clone();
+        let deadline = std::time::Instant::now() + service::REQUEST_BUDGET;
+        service::blocking(deadline, move || {
+            service::check_root(expected.as_ref(), deadline)
+        })
+        .await
+    }
+
+    pub(crate) async fn generate(
+        &self,
+        request: public_certificate_models::v1::PublicCertificateRequest,
+    ) -> Result<public_certificate_models::PublicCertificateResponse, service::Error> {
+        use dterror::ResultExt;
+        let expected = self.expected_ca.clone();
+        let deadline = std::time::Instant::now() + service::REQUEST_BUDGET;
+        self.generate_with(deadline, move || {
+            derivation::derive_public_certificate_until(
+                request,
+                *uuid::Uuid::new_v4().as_bytes(),
+                expected.as_ref(),
+                deadline,
+            )
+            .with_contexts((), "derive public certificates")
+        })
+        .await
+    }
+
+    async fn generate_with<T: Send + 'static>(
+        &self,
+        deadline: std::time::Instant,
+        work: impl FnOnce() -> Result<T, service::Error> + Send + 'static,
+    ) -> Result<T, service::Error> {
+        use dterror::ResultExt;
+        let permit = self
+            .generation
+            .clone()
+            .try_acquire_owned()
+            .with_contexts((), "certificate generation busy")?;
+        service::blocking(deadline, move || {
+            // A timed-out or disconnected caller must not admit another worker.
+            let _permit = permit;
+            service::remaining(deadline)?;
+            work()
+        })
+        .await
     }
 }
 
@@ -54,3 +114,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
+
+#[cfg(test)]
+mod service_tests;

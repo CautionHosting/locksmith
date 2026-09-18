@@ -11,7 +11,7 @@ use locksmith::{
 use sequoia_openpgp::{Cert, parse::Parse};
 use std::sync::Arc;
 
-pub fn configured_authorizer() -> Result<Option<Authorizer>, Error> {
+pub fn configured_authorizer() -> Result<Option<(Authorizer, Cert)>, Error> {
     use dterror::{FromContexts, ResultExt};
     // Opt-in keeps existing certificate-only deployments working.
     let Some(path) = std::env::var_os("CAUTION_RELEASE_CONFIG") else {
@@ -42,12 +42,8 @@ pub fn configured_authorizer() -> Result<Option<Authorizer>, Error> {
                     e.into_boxed_dyn_error(),
                 )
             })?;
-    Ok(Some(Authorizer::new(
-        &config.rp_id,
-        &config.origin,
-        policy,
-        ca,
-    )?))
+    let authorizer = Authorizer::new(&config.rp_id, &config.origin, policy, ca.clone())?;
+    Ok(Some((authorizer, ca)))
 }
 fn unavailable() -> (StatusCode, &'static str) {
     (

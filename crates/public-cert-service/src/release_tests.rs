@@ -193,6 +193,7 @@ fn custody_http_and_destination_recover_mixed_quorum() {
             let auth = Authorizer::new("example.com", origin.as_str(), policy, ca).unwrap();
             let app = crate::router(Arc::new(AppState {
                 release: Some(Arc::new(auth)),
+                ..AppState::new()
             }));
             tokio::runtime::Runtime::new()
                 .unwrap()

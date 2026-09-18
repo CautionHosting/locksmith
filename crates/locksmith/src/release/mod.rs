@@ -118,7 +118,16 @@ pub fn verify_live(proof: &[u8], policy: &Measurements, nonce: &str) -> Result<V
             return Ok(data);
         }
     }
-    let now = now()?;
+    verify_live_at(proof, measurements, nonce.as_bytes(), now()?)
+}
+
+// Keep the production verifier and trust root identical when testing at a fixed clock.
+fn verify_live_at(
+    proof: &[u8],
+    measurements: HashMap<u8, Vec<u8>>,
+    nonce: &[u8],
+    now: Duration,
+) -> Result<Vec<u8>, Error> {
     let payload = Nitro::new(proof, measurements)
         .with_contexts((), "Nitro document")?
         .verify(now, &nonce)

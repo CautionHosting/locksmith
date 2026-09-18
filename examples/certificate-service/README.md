@@ -55,8 +55,16 @@ docker build --target build -f examples/certificate-service/Containerfile .
 After the gate passes, deploy the updated service from this checkout and unlock
 it with the existing external-PGP root holders. Record the new non-debug PCRs;
 configure those independently verified measurements in the CLI's recryptor
-policy and Platform's certificate-service policy. Restrict test ingress as
-appropriate: public certificate issuance is not permission to release a share.
+policy and Platform's certificate-service policy. Endpoints remain public for
+this milestone; access restrictions are deferred. Public certificate issuance
+is not permission to release a share.
+
+Startup verifies the configured CA against the recovered Keyfork root before
+serving. `/health` returns 503 if that root cannot be used or does not match.
+Certificate generation admits one blocking worker with a 60-second request budget,
+including Keyfork I/O; busy requests return 503. Timed-out workers retain their
+slot until they finish. Restarting only HTTP preserves Keyfork; an enclave restart
+requires fresh quorum recovery of the existing root bundle.
 
 Use an existing WebAuthn bundle to exercise native and browser approvals against
 an application enclave: locked below threshold, expected secret at threshold,

@@ -24,14 +24,19 @@ fn main() {
 async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
+    let mut state = AppState::new();
+    if let Some((authorizer, ca)) = public_cert_service::release::configured_authorizer()? {
+        state.release = Some(Arc::new(authorizer));
+        state.expected_ca = Some(ca);
+    }
+    state.check_ready().await?;
+
     let listen_addr =
         std::env::var("PUBLIC_CERT_SERVICE_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
     info!(%listen_addr, "binding public certificate service listener");
     let listener = TcpListener::bind(&listen_addr).await?;
 
-    let app = router(Arc::new(AppState {
-        release: public_cert_service::release::configured_authorizer()?.map(Arc::new),
-    }));
+    let app = router(Arc::new(state));
     info!("serving public certificate service");
     axum::serve(listener, app).await?;
 

@@ -1,6 +1,37 @@
 use super::*;
 use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
 
+#[test]
+fn signed_live_evidence_enforces_freshness() {
+    let proof = include_bytes!("../../tests/data/aws-test.cbor");
+    let measurements = HashMap::from([
+        (0, smex::decode_to_vec("ef093e4c1fd13878956589833c0e396b935cdf5ae45c1cc595e1a19a6da5812850f0ef3e77df918cb2a86d88ddf9cc03").unwrap()),
+        (1, smex::decode_to_vec("ef093e4c1fd13878956589833c0e396b935cdf5ae45c1cc595e1a19a6da5812850f0ef3e77df918cb2a86d88ddf9cc03").unwrap()),
+        (2, smex::decode_to_vec("21b9efbc184807662e966d34f390821309eeac6802309798826296bf3e8bec7c10edb30948c90ba67310f7b964fc500a").unwrap()),
+    ]);
+    let nonce =
+        smex::decode_to_vec("d041b23bce8678bbc7c174bd8494c4f9759386eec963ec69bfd45c1452b10636")
+            .unwrap();
+    let generated = Duration::from_millis(1766509563435);
+    for at in [
+        generated,
+        generated + TTL,
+        generated - Duration::from_secs(60),
+    ] {
+        assert!(verify_live_at(proof, measurements.clone(), &nonce, at).is_ok());
+    }
+    // Both clocks remain inside the fixture's certificate-validity window after
+    // Bootproof's existing skew allowance, so freshness must be the rejecting check.
+    for at in [
+        generated + TTL + Duration::from_millis(1),
+        generated - Duration::from_millis(60_001),
+    ] {
+        let error = verify_live_at(proof, measurements.clone(), &nonce, at).unwrap_err();
+        assert_eq!(error.kind, "stale or future Nitro evidence");
+    }
+    assert!(verify_live_at(proof, measurements, &[1; 32], generated).is_err());
+}
+
 fn fixture(uv: bool) -> (Authorizer, WebauthnAuthenticator<SoftPasskey>, SecurityKey) {
     let origin = Url::parse("https://example.com").unwrap();
     let webauthn = WebauthnBuilder::new("example.com", &origin)
@@ -350,18 +381,19 @@ fn mock_mixed_release_preserves_holder_and_transport() {
         (2, "ab".repeat(48)),
     ]);
     let nonce = random_nonce();
-    let begun = auth
-        .begin(BeginRequest {
-            version: Version::V1,
-            bundle: GenerateQuorumResponse {
-                data,
-                necroproof: proof,
-            },
-            holder: private.fingerprint().to_string(),
-            destination_policy: measurements.clone(),
-            client_nonce: nonce.clone(),
-        })
-        .unwrap();
+    let begin_request = BeginRequest {
+        version: Version::V1,
+        bundle: GenerateQuorumResponse {
+            data,
+            necroproof: proof,
+        },
+        holder: private.fingerprint().to_string(),
+        destination_policy: measurements.clone(),
+        client_nonce: nonce.clone(),
+    };
+    let other_request: BeginRequest =
+        serde_json::from_value(serde_json::to_value(&begin_request).unwrap()).unwrap();
+    let begun = auth.begin(begin_request).unwrap();
     verify_response(&begun, &measurements, &nonce).unwrap();
     let mut changed = serde_json::to_value(&begun).unwrap();
     changed["data"]["context"]["holder"] = serde_json::json!("substituted");
@@ -372,6 +404,27 @@ fn mock_mixed_release_preserves_holder_and_transport() {
     let destination = EphemeralSecret::random();
     let destination_key = PublicKey::from(&destination).to_bytes();
     let attestation = generate_live(&destination_key, &begun.data.context.transport_nonce).unwrap();
+    let other = auth.begin(other_request).unwrap();
+    assert_ne!(
+        begun.data.context.transport_nonce,
+        other.data.context.transport_nonce
+    );
+    let error = auth
+        .prepare(PrepareRequest {
+            version: Version::V1,
+            session_id: other.data.session_id.clone(),
+            destination_attestation: attestation.clone(),
+            client_nonce: nonce.clone(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, "synthetic release nonce");
+    assert!(
+        !auth
+            .pending
+            .lock()
+            .unwrap()
+            .contains_key(&other.data.session_id)
+    );
     let prepared = auth
         .prepare(PrepareRequest {
             version: Version::V1,
