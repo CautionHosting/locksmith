@@ -157,8 +157,18 @@ fn validate_request(request: &v1::GenerateQuorumRequest) -> Result<Vec<Cert>, Ge
         if !primary_keys.insert(cert.fingerprint()) {
             return Err(invalid("duplicate holder certificate"));
         }
+        let mut holder_encryption_keys = HashSet::new();
         for key in keys().for_storage_encryption() {
-            if !encryption_keys.insert(key.key().mpis().clone()) {
+            // KDF parameters do not change the private scalar that can decrypt.
+            let mut identity = key.key().mpis().clone();
+            if let openpgp::crypto::mpi::PublicKey::ECDH { hash, sym, .. } = &mut identity {
+                *hash = openpgp::types::HashAlgorithm::SHA256;
+                *sym = openpgp::types::SymmetricAlgorithm::AES256;
+            }
+            holder_encryption_keys.insert(identity);
+        }
+        for identity in holder_encryption_keys {
+            if !encryption_keys.insert(identity) {
                 return Err(invalid("holders must not share an encryption key"));
             }
         }

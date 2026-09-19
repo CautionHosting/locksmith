@@ -309,68 +309,49 @@ fn mock_mixed_release_preserves_holder_and_transport() {
     if std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() != Ok("1") {
         return;
     }
+    for (indices, external) in [
+        (vec![0], true),
+        (vec![1], false),
+        (vec![1, 0], false),
+        (vec![1, 0], true),
+    ] {
+        mock_release_with_indices(&indices, external);
+    }
+}
+
+#[cfg(feature = "unsafe-e2e")]
+fn mock_release_with_indices(indices: &[u8], external: bool) {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use keyfork_shard::{Format, openpgp::OpenPGP};
     use keymaker_models::generate_quorum::{
         GenerateQuorumBundle, GenerateQuorumResponse, deterministic_necroproof_nonce,
     };
-    use sequoia_openpgp::{
-        cert::prelude::*,
-        packet::signature::{SignatureBuilder, subpacket::NotationDataFlags},
-        serialize::SerializeInto,
-        types::SignatureType,
-    };
+    use sequoia_openpgp::serialize::SerializeInto;
     use x25519_dalek::{EphemeralSecret, PublicKey};
     let (mut auth, mut device, credential) = fixture(true);
-    let (cert, _) = CertBuilder::new()
-        .add_userid("Caution public certificate index=0")
-        .add_signing_subkey()
-        .add_storage_encryption_subkey()
-        .generate()
-        .unwrap();
-    let mut signer = auth
-        .ca
-        .primary_key()
-        .key()
-        .clone()
-        .parts_into_secret()
-        .unwrap()
-        .into_keypair()
-        .unwrap();
-    let signature = SignatureBuilder::new(SignatureType::PositiveCertification)
-        .set_notation(
-            ORG,
-            smex::encode_to_string([2u8; 16]),
-            NotationDataFlags::empty().set_human_readable(),
+    let mut holders = Vec::new();
+    if external {
+        holders.push(crate::client::tests::holder());
+    }
+    let position = holders.len();
+    for index in indices {
+        holders.push(certified_holder(
+            &auth.ca,
+            &[&format!("Caution public certificate index={index}")],
+            false,
             true,
-        )
-        .unwrap()
-        .set_notation(
-            BUNDLE,
-            smex::encode_to_string([1u8; 16]),
-            NotationDataFlags::empty().set_human_readable(),
-            true,
-        )
-        .unwrap();
-    let signature = cert
-        .userids()
-        .next()
-        .unwrap()
-        .userid()
-        .bind(&mut signer, &cert, signature)
-        .unwrap();
-    let private = cert
-        .insert_packets(vec![sequoia_openpgp::Packet::Signature(signature)])
-        .unwrap();
-    let external = crate::client::tests::holder();
-    // Use public copies for generation: secrets never enter a bundle.
+        ));
+    }
+    let private = holders[position].clone();
     let armor = |c: &Cert| String::from_utf8(c.armored().to_vec().unwrap()).unwrap();
-    let mut bundle = crate::client::tests::bundle(&[external, private.clone()], 2);
+    let mut bundle = crate::client::tests::bundle(&holders, holders.len() as u8);
     bundle.public_key = armor(&OpenPGP.derive_signing_key(&[7; 32]));
-    bundle.keyring[1] = v1::Key::WebAuthn {
-        cert: armor(&private),
-        credential: vec![serde_json::to_string(&credential).unwrap()],
-    };
+    for (entry, cert) in bundle.keyring.iter_mut().zip(&holders).skip(position) {
+        *entry = v1::Key::WebAuthn {
+            cert: armor(cert),
+            credential: vec![serde_json::to_string(&credential).unwrap()],
+        };
+    }
     let data = GenerateQuorumBundle::V1(bundle.clone());
     let proof = deterministic_necroproof_nonce(&deterministic_bundle_hash(&data).unwrap()).unwrap();
     auth.ca = auth.ca.strip_secret_key_material();
@@ -404,8 +385,8 @@ fn mock_mixed_release_preserves_holder_and_transport() {
     changed["data"]["context"]["holder"] = serde_json::json!("substituted");
     let changed: Attested<Begun> = serde_json::from_value(changed).unwrap();
     assert!(verify_response(&changed, &measurements, &nonce).is_err());
-    assert_eq!(begun.data.context.holder_position, 1);
-    assert_eq!(begun.data.context.certificate_index, 0);
+    assert_eq!(begun.data.context.holder_position, position as u8);
+    assert_eq!(begun.data.context.certificate_index, indices[0]);
     let destination = EphemeralSecret::random();
     let destination_key = PublicKey::from(&destination).to_bytes();
     let attestation = generate_live(&destination_key, &begun.data.context.transport_nonce).unwrap();
@@ -447,7 +428,10 @@ fn mock_mixed_release_preserves_holder_and_transport() {
                 session_id: prepared.data.session_id,
                 assertion,
             },
-            |context, bundle, key| crypto::recrypt(context, bundle, key, private.clone()),
+            |context, bundle, key| {
+                assert_eq!(context.certificate_index, indices[0]);
+                crypto::recrypt(context, bundle, key, private.clone())
+            },
         )
         .unwrap();
     crypto::verify_request(&armor(&private), &encrypted, SystemTime::now()).unwrap();
@@ -469,47 +453,41 @@ fn mock_mixed_release_preserves_holder_and_transport() {
         )
         .unwrap();
     let share: crate::models::SendShardRequest = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(share.threshold, 2);
-    assert_eq!(share.shard[0], 2);
+    assert_eq!(share.threshold, holders.len() as u8);
+    assert_eq!(share.shard[0], position as u8 + 1);
     assert_eq!(share.shard.len(), 33);
     let mut altered = encrypted;
     altered.signed_payload.push(' ');
     assert!(crypto::verify_request(&armor(&private), &altered, SystemTime::now()).is_err());
 }
 
-#[test]
-fn certificate_context_requires_the_expected_ca_bundle_and_index() {
+fn certified_holder(ca: &Cert, userids: &[&str], duplicate: bool, certify: bool) -> Cert {
     use sequoia_openpgp::{
         cert::CertBuilder,
-        packet::{
-            Packet,
-            signature::{SignatureBuilder, subpacket::NotationDataFlags},
-        },
+        packet::signature::{SignatureBuilder, subpacket::NotationDataFlags},
         types::SignatureType,
     };
-    let (ca, _) = CertBuilder::general_purpose(None, Some("test CA"))
-        .set_creation_time(SystemTime::now() - Duration::from_secs(3 * 86400))
-        .set_validity_period(Duration::from_secs(86400))
-        .generate()
+    let mut builder = CertBuilder::new()
+        .add_signing_subkey()
+        .add_authentication_subkey()
+        .add_storage_encryption_subkey();
+    for uid in userids {
+        builder = builder.add_userid(*uid);
+    }
+    let (cert, _) = builder.generate().unwrap();
+    if !certify {
+        return cert;
+    }
+    let mut signer = ca
+        .primary_key()
+        .key()
+        .clone()
+        .parts_into_secret()
+        .unwrap()
+        .into_keypair()
         .unwrap();
-    let (other_ca, _) = CertBuilder::general_purpose(None, Some("wrong CA"))
-        .generate()
-        .unwrap();
-    let make = |duplicate: bool| {
-        let (cert, _) = CertBuilder::new()
-            .add_userid("Caution public certificate index=0")
-            .add_signing_subkey()
-            .add_storage_encryption_subkey()
-            .generate()
-            .unwrap();
-        let mut signer = ca
-            .primary_key()
-            .key()
-            .clone()
-            .parts_into_secret()
-            .unwrap()
-            .into_keypair()
-            .unwrap();
+    let mut packets = Vec::new();
+    for uid in cert.userids() {
         let mut signature = SignatureBuilder::new(SignatureType::PositiveCertification)
             .set_notation(
                 ORG,
@@ -535,63 +513,77 @@ fn certificate_context_requires_the_expected_ca_bundle_and_index() {
                 )
                 .unwrap();
         }
-        let signature = cert
-            .userids()
-            .next()
-            .unwrap()
-            .userid()
-            .bind(&mut signer, &cert, signature)
-            .unwrap();
-        cert.insert_packets(vec![Packet::Signature(signature)])
-            .unwrap()
-            .strip_secret_key_material()
-    };
-    let cert = make(false);
-    let at = SystemTime::now();
-    assert_eq!(
-        certified_context(
-            &cert,
-            &ca.clone().strip_secret_key_material(),
-            [1; 16],
-            0,
-            at
-        )
-        .unwrap(),
-        [2; 16]
-    );
-    assert!(
-        certified_context(&cert, &other_ca.strip_secret_key_material(), [1; 16], 0, at).is_err()
-    );
-    assert!(
-        certified_context(
-            &cert,
-            &ca.clone().strip_secret_key_material(),
-            [3; 16],
-            0,
-            at
-        )
-        .is_err()
-    );
-    assert!(
-        certified_context(
-            &cert,
-            &ca.clone().strip_secret_key_material(),
-            [1; 16],
-            1,
-            at
-        )
-        .is_err()
-    );
-    assert!(
-        certified_context(
-            &make(true),
-            &ca.clone().strip_secret_key_material(),
-            [1; 16],
-            0,
-            at
-        )
-        .is_err()
-    );
+        packets.push(sequoia_openpgp::Packet::Signature(
+            uid.userid().bind(&mut signer, &cert, signature).unwrap(),
+        ));
+    }
+    cert.insert_packets(packets).unwrap()
+}
+
+#[test]
+fn certificate_context_requires_the_expected_ca_bundle_and_canonical_index() {
+    use sequoia_openpgp::cert::CertBuilder;
+    let (ca, _) = CertBuilder::general_purpose(None, Some("test CA"))
+        .set_creation_time(SystemTime::now() - Duration::from_secs(3 * 86400))
+        .set_validity_period(Duration::from_secs(86400))
+        .generate()
+        .unwrap();
+    let (other_ca, _) = CertBuilder::general_purpose(None, Some("wrong CA"))
+        .generate()
+        .unwrap();
+    let public_ca = ca.clone().strip_secret_key_material();
+    for index in [0, 1, 254] {
+        let uid = format!("Caution public certificate index={index}");
+        let cert = certified_holder(&ca, &[&uid], false, true).strip_secret_key_material();
+        let at = SystemTime::now();
+        assert_eq!(
+            certified_context(&cert, &public_ca, [1; 16], at).unwrap(),
+            ([2; 16], index)
+        );
+        assert!(
+            certified_context(
+                &cert,
+                &other_ca.clone().strip_secret_key_material(),
+                [1; 16],
+                at
+            )
+            .is_err()
+        );
+        assert!(certified_context(&cert, &public_ca, [3; 16], at).is_err());
+    }
+    for uid in [
+        "Caution public certificate index=01",
+        "Caution public certificate index=+1",
+        "Caution public certificate index=256",
+        "Caution public certificate index=-1",
+        "Caution public certificate index=",
+        "unrelated",
+    ] {
+        let cert = certified_holder(&ca, &[uid], false, true).strip_secret_key_material();
+        let at = SystemTime::now();
+        assert_eq!(
+            certified_context(&cert, &public_ca, [1; 16], at)
+                .unwrap_err()
+                .kind,
+            "certificate index"
+        );
+    }
+    for (uids, duplicate, certify) in [
+        (vec!["Caution public certificate index=1"], true, true),
+        (vec!["Caution public certificate index=1"], false, false),
+        (
+            vec![
+                "Caution public certificate index=0",
+                "Caution public certificate index=1",
+            ],
+            false,
+            true,
+        ),
+    ] {
+        let cert = certified_holder(&ca, &uids, duplicate, certify).strip_secret_key_material();
+        let at = SystemTime::now();
+        assert!(certified_context(&cert, &public_ca, [1; 16], at).is_err());
+    }
 }
 
 #[test]

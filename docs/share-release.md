@@ -141,3 +141,43 @@ acknowledges the share. Existing error propagation still stops metadata failure
 before share decryption, share failure before signing, and signing failure before
 network submission. These hardware failure paths were source-reviewed, not
 exercised against a physical card.
+
+## Certified indices and independent recipients
+
+Release obtains the certificate derivation index from the canonical
+`Caution public certificate index=N` UID authenticated by the configured CA at
+bundle-generation time. The index is independent of `holder_position`, which
+continues to address the holder inside the proof-bound keyring. Subsets and
+reordered certificates therefore retain their original derivation indices.
+Conflicting authenticated indices or organizations, malformed indices, and
+invalid CA/bundle context are rejected. Existing affected bundles need no format
+change or reordering; deploy the corrected certificate service to recover them.
+
+Keymaker rejects ECDH recipients in different holders sharing the same curve and
+public point even when their KDF hash or cipher differs. Equivalent subkeys within
+one holder are deduplicated for validation and remain valid for shard encryption. Normalization applies only to copied
+comparison material; the certificates and encryption parameters are unchanged.
+An existing quorum with shared encryption material remains weak after upgrading
+validation and requires a separate assessment/migration. Coordinate the matching
+Platform API/CLI checks with the Keymaker deployment. Rebuild the affected services
+and establish the trusted PCR policies for those builds; a client update alone
+does not update the services.
+
+Focused regression checks:
+
+```sh
+cargo test --locked -p keymaker --no-default-features
+cargo test --locked -p locksmith --lib release::tests
+CAUTION_UNSAFE_KEY_SERVICE_E2E=1 cargo test --locked -p locksmith --lib --features unsafe-e2e release::tests
+```
+
+The tests cover independent KDF variations, canonical certified indices and
+invalid contexts, and synthetic subset/reordered/mixed release through assertion
+verification and share re-encryption. Synthetic tests supply fixture private keys;
+they do not establish live custody-key provisioning or Nitro behavior.
+
+Validation on 2026-09-19: Keymaker's host suite passed (10 tests), including
+within-holder KDF variants, cross-holder rejection in both orders, and real 1-of-1
+shard encryption with equivalent subkeys. The gated synthetic release suite passed (10 tests), including 1-of-1 certificate-index-1,
+reordered WebAuthn, and mixed-holder cases. No service deployment or live Nitro
+validation was performed.

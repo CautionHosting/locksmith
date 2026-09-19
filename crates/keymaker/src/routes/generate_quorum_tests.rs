@@ -115,10 +115,31 @@ fn rejects_expired_and_revoked_certificates() {
 
 #[test]
 fn rejects_shared_encryption_subkey() {
-    let first = holder(true, true, true);
-    let second = holder(true, true, false);
+    use openpgp::types::{HashAlgorithm, SymmetricAlgorithm};
+    for kdf in [
+        None,
+        Some((HashAlgorithm::SHA512, SymmetricAlgorithm::AES256)),
+        Some((HashAlgorithm::SHA256, SymmetricAlgorithm::AES128)),
+        Some((HashAlgorithm::SHA512, SymmetricAlgorithm::AES128)),
+    ] {
+        rejects_shared_encryption_subkey_with_kdf(kdf);
+    }
+}
+
+fn rejects_shared_encryption_subkey_with_kdf(
+    kdf: Option<(
+        openpgp::types::HashAlgorithm,
+        openpgp::types::SymmetricAlgorithm,
+    )>,
+) {
+    use openpgp::{
+        crypto::mpi::PublicKey,
+        packet::signature::SignatureBuilder,
+        types::{HashAlgorithm, SignatureType, SymmetricAlgorithm},
+    };
+    let donor = holder(true, true, true);
     let policy = openpgp::policy::StandardPolicy::new();
-    let mut subkey = first
+    let mut subkey = donor
         .keys()
         .subkeys()
         .with_policy(&policy, None)
@@ -128,32 +149,91 @@ fn rejects_shared_encryption_subkey() {
         .key()
         .clone()
         .parts_into_public();
-    // Changing packet metadata changes the fingerprint, but not who can decrypt.
+    let PublicKey::ECDH { hash, sym, .. } = subkey.mpis_mut() else {
+        panic!("expected ECDH fixture");
+    };
+    *hash = HashAlgorithm::SHA256;
+    *sym = SymmetricAlgorithm::AES256;
+    let bind = |cert: Cert,
+                subkey: openpgp::packet::Key<
+        openpgp::packet::key::PublicParts,
+        openpgp::packet::key::SubordinateRole,
+    >| {
+        let mut signer = cert
+            .primary_key()
+            .key()
+            .clone()
+            .parts_into_secret()
+            .unwrap()
+            .into_keypair()
+            .unwrap();
+        let signature = subkey
+            .bind(
+                &mut signer,
+                &cert,
+                SignatureBuilder::new(SignatureType::SubkeyBinding)
+                    .set_key_flags(KeyFlags::empty().set_storage_encryption())
+                    .unwrap(),
+            )
+            .unwrap();
+        cert.insert_packets([openpgp::Packet::PublicSubkey(subkey), signature.into()])
+            .unwrap()
+    };
+    let first = bind(holder(true, true, false), subkey.clone());
+    let original = subkey.mpis().clone();
+    // Vary metadata independently of the KDF while preserving the encryption scalar.
     subkey
         .set_creation_time(SystemTime::now() - Duration::from_secs(60))
         .unwrap();
-    let mut signer = second
-        .primary_key()
-        .key()
-        .clone()
-        .parts_into_secret()
-        .unwrap()
-        .into_keypair()
+    if let Some((new_hash, new_sym)) = kdf {
+        let PublicKey::ECDH { hash, sym, .. } = subkey.mpis_mut() else {
+            unreachable!()
+        };
+        *hash = new_hash;
+        *sym = new_sym;
+    }
+    assert_eq!(subkey.mpis() != &original, kdf.is_some());
+    let repeated = bind(first.clone(), subkey.clone());
+    assert_eq!(
+        repeated
+            .keys()
+            .with_policy(&policy, None)
+            .alive()
+            .revoked(false)
+            .for_storage_encryption()
+            .count(),
+        2
+    );
+    let single = request(vec![entry(&repeated)]);
+    let before = serde_json::to_vec(&single).unwrap();
+    let certs = validate_request(&single).unwrap();
+    assert_eq!(serde_json::to_vec(&single).unwrap(), before);
+    let mut encrypted = Vec::new();
+    OpenPGP
+        .shard_and_encrypt(1, 1, &[7; 32], &*certs, &mut encrypted)
         .unwrap();
-    let binding = subkey
-        .bind(
-            &mut signer,
-            &second,
-            openpgp::packet::signature::SignatureBuilder::new(
-                openpgp::types::SignatureType::SubkeyBinding,
-            )
-            .set_key_flags(KeyFlags::empty().set_storage_encryption())
-            .unwrap(),
-        )
-        .unwrap();
-    let second = second
-        .insert_packets([openpgp::Packet::PublicSubkey(subkey), binding.into()])
-        .unwrap();
+    assert!(!encrypted.is_empty());
+    let independent = holder(true, true, true);
+    let mut pair = request(vec![entry(&repeated), entry(&independent)]);
+    pair.threshold = 2;
+    assert!(validate_request(&pair).is_ok());
+    let second = bind(holder(true, true, false), subkey);
+    for keys in [
+        vec![entry(&repeated), entry(&second)],
+        vec![entry(&second), entry(&repeated)],
+    ] {
+        let mut pair = request(keys);
+        pair.threshold = 2;
+        assert!(matches!(
+            validate_request(&pair).unwrap_err().kind,
+            GenerateQuorumErrorKind::InvalidCertificate {
+                index: 1,
+                reason: "holders must not share an encryption key"
+            }
+        ));
+    }
+    assert!(validate_request(&request(vec![entry(&first)])).is_ok());
+    assert!(validate_request(&request(vec![entry(&second)])).is_ok());
     let error = validate_request(&request(vec![entry(&first), entry(&second)])).unwrap_err();
     assert!(matches!(
         error.kind,

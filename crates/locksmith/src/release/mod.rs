@@ -309,7 +309,6 @@ impl Authorizer {
             return Err(Error::invalid("quorum dimensions"));
         }
         let mut matches = Vec::new();
-        let mut certificate_index = 0u8;
         for (position, key) in bundle.keyring.iter().enumerate() {
             let (cert, credentials) = match key {
                 v1::Key::OpenPGP { cert } => (cert, None),
@@ -324,10 +323,7 @@ impl Authorizer {
                 )
             })?;
             if cert.fingerprint().to_string() == request.holder {
-                matches.push((position, certificate_index, cert, credentials));
-            }
-            if credentials.is_some() {
-                certificate_index += 1;
+                matches.push((position, cert, credentials));
             }
         }
         if matches.len() != 1 {
@@ -335,7 +331,7 @@ impl Authorizer {
                 "holder must identify exactly one certificate",
             ));
         }
-        let (position, index, cert, credentials) = matches.pop().unwrap();
+        let (position, cert, credentials) = matches.pop().unwrap();
         let credentials =
             credentials.ok_or_else(|| Error::invalid("selected holder uses external PGP"))?;
         if credentials.is_empty() || credentials.len() > 64 {
@@ -357,11 +353,10 @@ impl Authorizer {
             (std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1"))
                 .then(SystemTime::now)
         });
-        let organization_id = certified_context(
+        let (organization_id, index) = certified_context(
             &cert,
             &self.ca,
             bundle.bundle_id,
-            index,
             at.ok_or_else(|| Error::invalid("authenticated generation timestamp required"))?,
         )?;
         let context = Context {
@@ -486,9 +481,8 @@ fn certified_context(
     cert: &Cert,
     ca: &Cert,
     bundle_id: [u8; 16],
-    index: u8,
     at: SystemTime,
-) -> Result<[u8; 16], Error> {
+) -> Result<([u8; 16], u8), Error> {
     let mut policy = StandardPolicy::new();
     policy.good_critical_notations(&[ORG, BUNDLE]);
     crate::custody::validate_ca_anchor(ca, at)?;
@@ -510,39 +504,43 @@ fn certified_context(
     ) {
         return Err(Error::invalid("revoked holder certificate"));
     }
-    let expected = format!("Caution public certificate index={index}");
-    let uid = valid
-        .userids()
-        .revoked(false)
-        .find(|uid| uid.userid().value() == expected.as_bytes())
-        .ok_or_else(|| Error::invalid("certificate index"))?;
-    let mut organization = None;
-    for signature in uid.valid_certifications_by_key(&policy, at, ca.primary_key().key()) {
-        if signature.unhashed_area().iter().any(|p| matches!(p.value(), SubpacketValue::NotationData(n) if [ORG,BUNDLE].contains(&n.name()))) { return Err(Error::invalid("unhashed certificate context")); }
-        let read = |name| -> Result<Vec<u8>, Error> {
-            let values: Vec<_> = signature
-                .notation_data()
-                .filter(|n| n.name() == name)
-                .collect();
-            if values.len() != 1 {
-                return Err(Error::invalid("missing or duplicate certificate context"));
+    let mut context = None;
+    for uid in valid.userids().revoked(false) {
+        for signature in uid.valid_certifications_by_key(&policy, at, ca.primary_key().key()) {
+            let value = std::str::from_utf8(uid.userid().value())
+                .with_contexts((), "certificate index UTF8")?;
+            let index = value
+                .strip_prefix("Caution public certificate index=")
+                .and_then(|index| index.parse::<u8>().ok())
+                .filter(|index| value == format!("Caution public certificate index={index}"))
+                .ok_or_else(|| Error::invalid("certificate index"))?;
+            if signature.unhashed_area().iter().any(|p| matches!(p.value(), SubpacketValue::NotationData(n) if [ORG,BUNDLE].contains(&n.name()))) { return Err(Error::invalid("unhashed certificate context")); }
+            let read = |name| -> Result<Vec<u8>, Error> {
+                let values: Vec<_> = signature
+                    .notation_data()
+                    .filter(|n| n.name() == name)
+                    .collect();
+                if values.len() != 1 {
+                    return Err(Error::invalid("missing or duplicate certificate context"));
+                }
+                let value = std::str::from_utf8(values[0].value())
+                    .with_contexts((), "certificate context UTF8")?;
+                smex::decode_to_vec(value).with_contexts((), "certificate context hex")
+            };
+            if read(BUNDLE)? != bundle_id {
+                return Err(Error::invalid("certificate bundle mismatch"));
             }
-            let value = std::str::from_utf8(values[0].value())
-                .with_contexts((), "certificate context UTF8")?;
-            smex::decode_to_vec(value).with_contexts((), "certificate context hex")
-        };
-        if read(BUNDLE)? != bundle_id {
-            return Err(Error::invalid("certificate bundle mismatch"));
+            let org: [u8; 16] = read(ORG)?
+                .try_into()
+                .map_err(|_| Error::invalid("organization UUID length"))?;
+            let candidate = (org, index);
+            if context.is_some_and(|old| old != candidate) {
+                return Err(Error::invalid("conflicting certificate contexts"));
+            }
+            context = Some(candidate);
         }
-        let org: [u8; 16] = read(ORG)?
-            .try_into()
-            .map_err(|_| Error::invalid("organization UUID length"))?;
-        if organization.is_some_and(|old| old != org) {
-            return Err(Error::invalid("conflicting organizations"));
-        }
-        organization = Some(org);
     }
-    organization.ok_or_else(|| Error::invalid("missing CA certification"))
+    context.ok_or_else(|| Error::invalid("missing CA certification"))
 }
 
 #[cfg(test)]
