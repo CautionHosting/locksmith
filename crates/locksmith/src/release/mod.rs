@@ -517,14 +517,22 @@ fn certified_context(
             if signature.unhashed_area().iter().any(|p| matches!(p.value(), SubpacketValue::NotationData(n) if [ORG,BUNDLE].contains(&n.name()))) { return Err(Error::invalid("unhashed certificate context")); }
             let read = |name| -> Result<Vec<u8>, Error> {
                 let values: Vec<_> = signature
-                    .notation_data()
-                    .filter(|n| n.name() == name)
+                    .hashed_area()
+                    .iter()
+                    .filter_map(|packet| match packet.value() {
+                        SubpacketValue::NotationData(n) if n.name() == name => {
+                            Some((packet.critical(), n.value()))
+                        }
+                        _ => None,
+                    })
                     .collect();
-                if values.len() != 1 {
-                    return Err(Error::invalid("missing or duplicate certificate context"));
-                }
-                let value = std::str::from_utf8(values[0].value())
-                    .with_contexts((), "certificate context UTF8")?;
+                let [(true, value)] = values.as_slice() else {
+                    return Err(Error::invalid(
+                        "missing, duplicate or noncritical certificate context",
+                    ));
+                };
+                let value =
+                    std::str::from_utf8(value).with_contexts((), "certificate context UTF8")?;
                 smex::decode_to_vec(value).with_contexts((), "certificate context hex")
             };
             if read(BUNDLE)? != bundle_id {

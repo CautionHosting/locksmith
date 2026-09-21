@@ -232,6 +232,41 @@ mod tests {
     }
 
     #[test]
+    fn v1_contract_fixture_preserves_exact_quorum_encoding_and_nonce() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/v1-contract.json"
+        )))
+        .unwrap();
+        assert_eq!(fixture["fixture_version"], 1);
+        let expected = &fixture["quorum"];
+        let bundle: GenerateQuorumBundle =
+            serde_json::from_value(expected["data"].clone()).unwrap();
+        let hex = |bytes: &[u8]| {
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let canonical = serde_cbor::value::to_value(&bundle).unwrap();
+        assert_eq!(
+            hex(&serde_cbor::to_vec(&canonical).unwrap()),
+            expected["cbor_hex"]
+        );
+        let hash = deterministic_bundle_hash(&bundle).unwrap();
+        assert_eq!(hex(&hash), expected["sha256"]);
+        let nonce = super::generate_quorum::deterministic_necroproof_nonce(&hash).unwrap();
+        assert_eq!(hex(&nonce), expected["proof_nonce_hex"]);
+        assert!(fixture["public_certificates"]["proof_nonce"].is_null());
+        assert!(
+            serde_json::from_value::<GenerateQuorumBundle>(
+                fixture["public_certificates"]["data"].clone()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn deterministic_bundle_hash_is_stable_across_label_order_and_json_roundtrip() {
         let first = sample_bundle(HashMap::from_iter([
             ("name".to_string(), "demo".to_string()),

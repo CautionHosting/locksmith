@@ -462,6 +462,16 @@ fn mock_release_with_indices(indices: &[u8], external: bool) {
 }
 
 fn certified_holder(ca: &Cert, userids: &[&str], duplicate: bool, certify: bool) -> Cert {
+    certified_holder_with_flags(ca, userids, duplicate, certify, [true, true])
+}
+
+fn certified_holder_with_flags(
+    ca: &Cert,
+    userids: &[&str],
+    duplicate: bool,
+    certify: bool,
+    critical: [bool; 2],
+) -> Cert {
     use sequoia_openpgp::{
         cert::CertBuilder,
         packet::signature::{SignatureBuilder, subpacket::NotationDataFlags},
@@ -493,14 +503,14 @@ fn certified_holder(ca: &Cert, userids: &[&str], duplicate: bool, certify: bool)
                 ORG,
                 "02020202020202020202020202020202",
                 NotationDataFlags::empty().set_human_readable(),
-                true,
+                critical[0],
             )
             .unwrap()
             .set_notation(
                 BUNDLE,
                 "01010101010101010101010101010101",
                 NotationDataFlags::empty().set_human_readable(),
-                true,
+                critical[1],
             )
             .unwrap();
         if duplicate {
@@ -650,4 +660,75 @@ fn reservations_limit_bundles_and_global_capacity_including_in_flight_sessions()
         .is_err()
     );
     assert!(auth.quotas.lock().unwrap().is_empty());
+}
+
+#[test]
+fn certificate_context_rejects_valid_ca_signatures_with_noncritical_context() {
+    use sequoia_openpgp::cert::CertBuilder;
+    let ca = CertBuilder::general_purpose(None, Some("test CA"))
+        .generate()
+        .unwrap()
+        .0;
+    let anchor = ca.clone().strip_secret_key_material();
+    for critical in [[false, true], [true, false], [false, false]] {
+        let cert = certified_holder_with_flags(
+            &ca,
+            &["Caution public certificate index=0"],
+            false,
+            true,
+            critical,
+        )
+        .strip_secret_key_material();
+        let at = SystemTime::now();
+        let mut policy = StandardPolicy::new();
+        policy.good_critical_notations(&[ORG, BUNDLE]);
+        let valid = cert.with_policy(&policy, at).unwrap();
+        assert_eq!(
+            valid
+                .userids()
+                .next()
+                .unwrap()
+                .valid_certifications_by_key(&policy, at, anchor.primary_key().key())
+                .count(),
+            1
+        );
+        assert_eq!(
+            certified_context(&cert, &anchor, [1; 16], at)
+                .unwrap_err()
+                .kind,
+            "missing, duplicate or noncritical certificate context"
+        );
+    }
+}
+
+#[test]
+fn v1_contract_fixture_preserves_certified_context() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/v1-contract.json"
+    )))
+    .unwrap();
+    assert_eq!(fixture["fixture_version"], 1);
+    let anchor = Cert::from_bytes(fixture["public_ca"].as_str().unwrap().as_bytes()).unwrap();
+    assert!(!anchor.is_tsk());
+    let at = SystemTime::UNIX_EPOCH
+        + Duration::from_secs(fixture["verification_time_unix_seconds"].as_u64().unwrap());
+    let org: [u8; 16] =
+        serde_json::from_value(fixture["expected_context"]["organization_id"].clone()).unwrap();
+    let id: [u8; 16] =
+        serde_json::from_value(fixture["expected_context"]["bundle_id"].clone()).unwrap();
+    let indices: Vec<u8> =
+        serde_json::from_value(fixture["expected_context"]["certificate_indices"].clone()).unwrap();
+    let certificates = fixture["public_certificates"]["data"]["certificates"]
+        .as_array()
+        .unwrap();
+    assert_eq!(certificates.len(), indices.len());
+    for (cert, index) in certificates.iter().zip(indices) {
+        let cert = Cert::from_bytes(cert.as_str().unwrap().as_bytes()).unwrap();
+        assert!(!cert.is_tsk());
+        assert_eq!(
+            certified_context(&cert, &anchor, id, at).unwrap(),
+            (org, index)
+        );
+    }
 }

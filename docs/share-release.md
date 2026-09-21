@@ -1,5 +1,9 @@
 # WebAuthn share recovery
 
+See [the current V1 contract](v1-contract.md) for the accepted CA-certified UID
+profile, critical-notation checks, fixed compatibility fixtures and first-test scope.
+The critical-notation patch is local; publish and align downstream pins before shipping.
+
 The existing certificate service also hosts `/v1/releases/begin`, `/prepare` and
 `/complete`. It uses the same bootstrapped Keyforkd custody root. Keymaker remains
 single-use and is not called during recovery, retries or restarts.

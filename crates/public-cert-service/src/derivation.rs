@@ -407,6 +407,53 @@ mod tests {
     }
 
     #[test]
+    fn v1_contract_fixture_preserves_exact_certificate_encoding() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/v1-contract.json"
+        )))
+        .unwrap();
+        assert_eq!(fixture["fixture_version"], 1);
+        let expected = &fixture["public_certificates"];
+        let data: PublicCertificateBundle =
+            serde_json::from_value(expected["data"].clone()).unwrap();
+        assert_eq!(
+            hex::encode(serde_cbor::to_vec(&data).unwrap()),
+            expected["cbor_hex"]
+        );
+        assert_eq!(
+            hex::encode(deterministic_bundle_hash(&data).unwrap()),
+            expected["sha256"]
+        );
+        assert!(expected["proof_nonce"].is_null());
+        assert!(
+            serde_json::from_value::<PublicCertificateBundle>(fixture["quorum"]["data"].clone())
+                .is_err()
+        );
+        assert_eq!(
+            public_certificate_key_flags(),
+            [
+                KeyFlags::empty().set_certification(),
+                KeyFlags::empty().set_signing(),
+                KeyFlags::empty()
+                    .set_transport_encryption()
+                    .set_storage_encryption(),
+                KeyFlags::empty().set_authentication(),
+            ]
+        );
+        let original_hash = deterministic_bundle_hash(&data).unwrap();
+        for changed in ["organization_id", "bundle_id", "certificates"] {
+            let mut value = expected["data"].clone();
+            match changed {
+                "certificates" => value[changed][0] = "changed certificate".into(),
+                _ => value[changed][0] = 42.into(),
+            }
+            let changed: PublicCertificateBundle = serde_json::from_value(value).unwrap();
+            assert_ne!(deterministic_bundle_hash(&changed).unwrap(), original_hash);
+        }
+    }
+
+    #[test]
     fn deterministic_bundle_hash_is_stable() {
         let bundle = PublicCertificateBundle::V1(v1::PublicCertificateBundle {
             organization_id: ORG_ID,
