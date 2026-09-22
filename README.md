@@ -33,6 +33,15 @@ this capability check does not verify the Caution CA or authorize WebAuthn
 recovery. Certificate derivation verification and WebAuthn transport remain
 separate integration work.
 
+## Keymaker client example
+
+`cargo run -p keymaker-client --example generate_quorum` reads `keyring.asc`
+from the current directory. It accepts multiple public certificates in one armor
+block or concatenated armor blocks, and sends one V1 holder per certificate in
+input order. The example uses threshold 2 and requires 2 to 254 certificates;
+malformed keyrings fail locally before contacting Keymaker. Keymaker still
+validates holder eligibility and independence.
+
 ## Locksmith runtime image
 
 `Containerfile` and `caution.hcl` build/run Keymaker. `Dockerfile` builds the

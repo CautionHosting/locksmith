@@ -7,7 +7,7 @@ use keymaker_client::{
 async fn main() {
     let keyring =
         std::fs::read_to_string("keyring.asc").expect("should be able to find static keyring");
-    let keys = split_ascii_armored_openpgp_keys(&keyring);
+    let keys = parse_keyring(&keyring).expect("valid keyring with 2 to 254 certificates");
     let max = u8::try_from(keys.len()).expect("keyring length fits in u8");
     let client = KeymakerClient::new(Default::default(), "http://localhost:8080".parse().unwrap());
     let request = GenerateQuorumRequest::V1(v1::GenerateQuorumRequest {
@@ -26,24 +26,84 @@ async fn main() {
     std::fs::write("new-bundle.json", encoded).expect("could write bundle");
 }
 
-fn split_ascii_armored_openpgp_keys(keyring: &str) -> Vec<String> {
-    const BEGIN: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
-    const END: &str = "-----END PGP PUBLIC KEY BLOCK-----";
+fn parse_keyring(keyring: &str) -> std::io::Result<Vec<String>> {
+    use sequoia_openpgp::{cert::CertParser, parse::Parse, serialize::SerializeInto};
+    use std::io::{Error, ErrorKind};
 
     let mut keys = Vec::new();
-    let mut current = Vec::new();
-    for line in keyring.lines() {
-        if line == BEGIN {
-            current.clear();
-        }
-        if !current.is_empty() || line == BEGIN {
-            current.push(line);
-        }
-        if line == END && !current.is_empty() {
-            keys.push(format!("{}\n", current.join("\n")));
-            current.clear();
+    for cert in CertParser::from_bytes(keyring.as_bytes()).map_err(Error::other)? {
+        let cert = cert.map_err(Error::other)?;
+        let armored = cert.armored().to_vec().map_err(Error::other)?;
+        keys.push(String::from_utf8(armored).map_err(Error::other)?);
+        if keys.len() > 254 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "at most 254 holders are supported",
+            ));
         }
     }
+    if keys.len() < 2 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "threshold 2 requires at least two holders",
+        ));
+    }
+    Ok(keys)
+}
 
-    keys
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sequoia_openpgp::{Cert, cert::CertParser, parse::Parse};
+
+    fn fixture_keyring() -> String {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/v0/bundle.json")).unwrap();
+        fixture["keyring"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn splits_certificates_within_one_armor_block_in_order() {
+        let keyring = fixture_keyring();
+        assert_eq!(
+            keyring
+                .matches("-----BEGIN PGP PUBLIC KEY BLOCK-----")
+                .count(),
+            1
+        );
+        let expected: Vec<_> = CertParser::from_bytes(keyring.as_bytes())
+            .unwrap()
+            .map(|cert| cert.unwrap().fingerprint())
+            .collect();
+        let keys = parse_keyring(&keyring).unwrap();
+        assert_eq!(keys.len(), 2);
+        let actual: Vec<_> = keys
+            .iter()
+            .map(|key| {
+                assert_eq!(CertParser::from_bytes(key.as_bytes()).unwrap().count(), 1);
+                Cert::from_bytes(key.as_bytes()).unwrap().fingerprint()
+            })
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(parse_keyring(&keys.concat()).unwrap(), keys);
+    }
+
+    #[test]
+    fn rejects_malformed_and_out_of_range_keyrings() {
+        let keys = parse_keyring(&fixture_keyring()).unwrap();
+        for input in [
+            String::new(),
+            "not a certificate".into(),
+            keys[0].clone(),
+            keys[0].repeat(255),
+        ] {
+            assert!(parse_keyring(&input).is_err());
+        }
+        assert_eq!(parse_keyring(&keys[0].repeat(254)).unwrap().len(), 254);
+        let mut damaged = keys.concat();
+        damaged.push_str(
+            "\n-----BEGIN PGP PUBLIC KEY BLOCK-----\ninvalid\n-----END PGP PUBLIC KEY BLOCK-----\n",
+        );
+        assert!(parse_keyring(&damaged).is_err());
+    }
 }
