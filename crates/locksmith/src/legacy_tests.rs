@@ -3,6 +3,7 @@ use crate::client::tests::{PrivateKeyFile, prompt};
 use keyfork_shard::{Format, openpgp::OpenPGP};
 use sequoia_openpgp::{
     cert::{CertBuilder, amalgamation::ValidAmalgamation},
+    policy::StandardPolicy,
     serialize::{Serialize, stream::*},
     types::KeyFlags,
 };
@@ -307,4 +308,43 @@ pub(crate) fn decrypt_ciphertext(path: &std::path::Path, entropy: [u8; 32]) -> V
         .remove(0);
     crate::openpgp::legacy_decrypt::decrypt(&message, &derived_key(entropy), None, prompt())
         .unwrap()
+}
+
+pub(crate) fn one_of_two_with_expired_holder() -> (ImportedV0, Cert, Cert) {
+    let alice = Cert::from_file(fixture("alice.private.asc")).unwrap();
+    let bob = CertBuilder::new()
+        .set_creation_time(std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 86400))
+        .set_validity_period(std::time::Duration::from_secs(86400))
+        .add_userid("expired nonparticipant")
+        .add_signing_subkey()
+        .add_storage_encryption_subkey()
+        .generate()
+        .unwrap()
+        .0;
+    let holders = [alice.clone(), bob.clone()];
+    let mut keyring = pgp::armor::Writer::new(Vec::new(), pgp::armor::Kind::PublicKey).unwrap();
+    for cert in &holders {
+        cert.serialize(&mut keyring).unwrap();
+    }
+    let keyring = String::from_utf8(keyring.finalize().unwrap()).unwrap();
+    let mut shards = Vec::new();
+    OpenPGP
+        .shard_and_encrypt(1, 2, &[7; 32], holders.as_slice(), &mut shards)
+        .unwrap();
+    let original = OriginalV0 {
+        label: HashMap::new(),
+        keyring_hash: Sha256::digest(keyring.as_bytes()).to_vec(),
+        keyring,
+        shardfile: String::from_utf8(shards).unwrap(),
+        public_key: String::from_utf8(derived_key([7; 32]).armored().to_vec().unwrap()).unwrap(),
+        necroproof: vec![],
+    };
+    let imported = import(
+        &serde_json::to_string(&original).unwrap(),
+        Some(&fixture("alice.private.asc")),
+        None,
+        prompt(),
+    )
+    .unwrap();
+    (imported, alice, bob)
 }

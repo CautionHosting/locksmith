@@ -4,10 +4,7 @@ use dterror::{FromContexts, ResultExt};
 use keyfork_shard::openpgp::EncryptedMessage;
 use keymaker_models::generate_quorum::v1::Key;
 use sequoia_openpgp::{
-    self as pgp, Cert, Packet, PacketPile,
-    cert::CertParser,
-    parse::Parse,
-    policy::{NullPolicy, StandardPolicy},
+    self as pgp, Cert, Packet, PacketPile, cert::CertParser, parse::Parse, policy::NullPolicy,
     serialize::SerializeInto,
 };
 use serde::{Deserialize, Serialize};
@@ -181,29 +178,27 @@ fn validate_holders(certs: &[Cert], threshold: u8, message_count: usize) -> Resu
     }
     let mut identities = HashSet::new();
     let mut material = HashMap::new();
-    let policy = StandardPolicy::new();
-    let decrypt_policy = NullPolicy::new();
+    let policy = NullPolicy::new();
     for (index, cert) in certs.iter().enumerate() {
         if cert.is_tsk() || !identities.insert(cert.fingerprint()) {
             return Err(Error::invalid("duplicate holder or private certificate"));
         }
-        // Existing encryption subkeys may have expired since generation. Live signatures must remain eligible.
+        // Loading checks historical structure, not every holder’s present authorization.
+        // The sender and receiver authorize the actual contribution separately.
         let signing: Vec<_> = cert
             .keys()
             .with_policy(&policy, None)
             .supported()
-            .alive()
-            .revoked(false)
             .for_signing()
             .collect();
         let encryption: Vec<_> = cert
             .keys()
-            .with_policy(&decrypt_policy, None)
+            .with_policy(&policy, None)
             .for_storage_encryption()
             .collect();
         if signing.is_empty() || encryption.is_empty() {
             return Err(Error::invalid(
-                "holder needs a currently eligible signing key and a storage decryption key",
+                "holder needs structurally valid signing and storage decryption keys",
             ));
         }
         for key in signing

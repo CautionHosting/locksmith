@@ -24,7 +24,7 @@ The ImportedV0 identity is SHA-256 of canonical CBOR containing its domain tag
 and complete contents; it has no invented UUID, generation time or proof.
 
 Only the known unversioned PGP shape is accepted. Checksum mismatches, malformed
-packets, inconsistent threshold/recipient counts, duplicate or ineligible holders,
+packets, inconsistent threshold/recipient counts, duplicate or structurally invalid holders,
 and V1-shaped inputs fail closed. Restore inconsistent source data from its
 original backup; there is no repair override or raw-V0 runtime fallback.
 
@@ -49,8 +49,14 @@ artifacts. Inspection reports “Legacy V0 — no Keymaker generation proof”. 
 paths recheck the imported threshold and full ordered certificates against the
 encrypted metadata. Fresh destination attestation, signed submissions, distinct
 holders/coordinates, threshold enforcement and recovered-public-key matching are
-unchanged. External PGP signing keys must remain usable under current policy;
-expired historical encryption subkeys may still decrypt their stored shares.
+unchanged. Import and loading validate holder certificate structure without requiring every
+holder to remain eligible to contribute. Expired nonparticipants do not block
+threshold recovery or restart; actual contributions retain the existing signing
+and verification checks. Expired historical encryption subkeys may still decrypt
+their stored shares. With explicit legacy acceptance, Platform encryption can use
+an unchanged expired quorum recipient while retaining algorithm and revocation
+checks. Default release selection prefers the imported `.caution/quorum-bundle.json`
+over the preserved raw `.caution/secrets/bundle.json`; `--bundle` remains explicit.
 
 The standalone `locksmith` developer CLI remains V1-only; use `caution` for legacy
 operations. WebAuthn, custody, Bootproof, V1 generation and V1 proof interfaces

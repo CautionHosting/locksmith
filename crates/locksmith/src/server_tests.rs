@@ -317,3 +317,25 @@ async fn downloaded_v0_recovers_and_decrypts() {
     let secret = recover_legacy(bundle).await;
     assert_eq!(crate::legacy::tests::decrypt_ciphertext(&work.join(".caution/secrets/LEGACY_ROUNDTRIP.asc"), secret), b"legacy-roundtrip");
 }
+
+
+#[tokio::test]
+async fn legacy_expired_nonparticipant_does_not_block_import_or_restart_recovery() {
+    use crate::{legacy::tests as legacy, client::{decrypt_shard, tests::prompt}};
+    let (imported, alice, bob) = legacy::one_of_two_with_expired_holder();
+    let json = serde_json::to_string(&imported).unwrap();
+    for _restart in 0..2 {
+        let (loaded, at) = crate::bundle::load_recovery_json(&json, None, true).unwrap();
+        let recovery = Recovery::new_at(&loaded, at).unwrap();
+        assert!(authenticate_holder(&recovery.keyrings, "current contribution", &sign(&bob, "current contribution")).is_err());
+        let holder = authenticate_holder(&recovery.keyrings, "current contribution", &sign(&alice, "current contribution")).unwrap();
+        assert_eq!(holder, 0);
+        let (request, _) = decrypt_shard(&loaded, Some(&legacy::fixture("alice.private.asc")), prompt()).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let (status_tx, mut status_rx) = tokio::sync::broadcast::channel(1);
+        let task = tokio::spawn(async move { reconstitute_shards(rx, status_tx, &recovery).await });
+        assert!(matches!(submit(&tx, &mut status_rx, holder, request.threshold, request.shard).await,
+            models::SendSignedEncryptedShardResponse::Accepted { remaining: 0 }));
+        assert_eq!(task.await.unwrap().unwrap(), [7; 32]);
+    }
+}
