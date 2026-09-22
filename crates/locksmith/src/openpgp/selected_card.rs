@@ -6,6 +6,7 @@ use keyfork_prompt::PromptHandler;
 use super::card_prompt::{validated_pin, METADATA, SHARE};
 use keyfork_shard::openpgp::EncryptedMessage;
 use keymaker_models::generate_quorum::v1;
+use crate::bundle::RecoverySource;
 use openpgp_card_sequoia::{Card, state::Open};
 use sequoia_openpgp::{
     self as pgp, Cert, Fingerprint, Packet, PacketPile,
@@ -112,10 +113,11 @@ impl DecryptionHelper for &mut Decryptor {
 }
 
 pub(crate) fn decrypt(
-    bundle: &v1::GenerateQuorumResponse,
+    bundle: &impl RecoverySource,
     holder: &str,
     prompt: Rc<Mutex<Box<dyn PromptHandler>>>,
 ) -> Result<(Vec<u8>, u8, usize), Error> {
+    let bundle = bundle.recovery();
     let certificates = bundle
         .keyring
         .iter()
@@ -136,7 +138,62 @@ pub(crate) fn decrypt(
         ));
     };
     let index = *index;
-    let allowed: HashSet<_> = certificates[index]
+    with_decryptor(&certificates[index], prompt, |helper| {
+            let mut recipients = Vec::new();
+            let mut messages = Vec::new();
+            for packet in PacketPile::from_bytes(bundle.shardfile.as_bytes())
+                .map_err(pgp_error)?
+                .into_children()
+            {
+                match packet {
+                    Packet::PKESK(packet) => recipients.push(packet),
+                    Packet::SEIP(packet) if !recipients.is_empty() => {
+                        messages.push(EncryptedMessage::new(&mut recipients, packet))
+                    }
+                    _ => return Err(Error::invalid("invalid shardfile packet")),
+                }
+            }
+            if !recipients.is_empty() || messages.len() != certificates.len() + 1 {
+                return Err(Error::invalid("shardfile message count"));
+            }
+            let metadata = messages[0]
+                .decrypt_with(&NullPolicy::new(), &mut *helper)
+                .with_contexts((), "decrypt selected holder metadata")?;
+            if metadata.len() < 2 || metadata[0] != 1 || metadata[1] != bundle.threshold {
+                return Err(Error::invalid("share metadata threshold/version"));
+            }
+            let metadata_certs = pgp::cert::CertParser::from_bytes(&metadata[2..])
+                .map_err(pgp_error)?
+                .collect::<pgp::Result<Vec<_>>>()
+                .map_err(pgp_error)?;
+            if metadata_certs.len() != certificates.len() + 1
+                || metadata_certs[1..]
+                    .iter()
+                    .zip(&certificates)
+                    .any(|(a, b)| if bundle.legacy { a != b } else { a.fingerprint() != b.fingerprint() })
+            {
+                return Err(Error::invalid("share metadata holder order"));
+            }
+            eprintln!("✓ Bundle metadata checked");
+            helper.operation = SHARE;
+            helper.signer = Some(metadata_certs[0].clone());
+            let share = messages[index + 1]
+                .decrypt_with(&NullPolicy::new(), &mut *helper)
+                .with_contexts((), "decrypt selected holder share")?;
+            if share.len() != 33 || usize::from(share[0]) != index + 1 {
+                return Err(Error::invalid("share coordinate"));
+            }
+            eprintln!("✓ Share decrypted");
+            Ok((share, bundle.threshold, index))
+        },
+    )
+}
+fn with_decryptor<R>(
+    certificate: &Cert,
+    prompt: Rc<Mutex<Box<dyn PromptHandler>>>,
+    operation: impl FnOnce(&mut Decryptor) -> Result<R, Error>,
+) -> Result<R, Error> {
+    let allowed: HashSet<_> = certificate
         .keys()
         .with_policy(&NullPolicy::new(), None)
         .for_storage_encryption()
@@ -171,55 +228,21 @@ pub(crate) fn decrypt(
                 operation: METADATA,
                 prompt,
             };
-            let mut recipients = Vec::new();
-            let mut messages = Vec::new();
-            for packet in PacketPile::from_bytes(bundle.shardfile.as_bytes())
-                .map_err(pgp_error)?
-                .into_children()
-            {
-                match packet {
-                    Packet::PKESK(packet) => recipients.push(packet),
-                    Packet::SEIP(packet) if !recipients.is_empty() => {
-                        messages.push(EncryptedMessage::new(&mut recipients, packet))
-                    }
-                    _ => return Err(Error::invalid("invalid shardfile packet")),
-                }
-            }
-            if !recipients.is_empty() || messages.len() != certificates.len() + 1 {
-                return Err(Error::invalid("shardfile message count"));
-            }
-            let metadata = messages[0]
-                .decrypt_with(&NullPolicy::new(), &mut helper)
-                .with_contexts((), "decrypt selected holder metadata")?;
-            if metadata.len() < 2 || metadata[0] != 1 || metadata[1] != bundle.threshold {
-                return Err(Error::invalid("share metadata threshold/version"));
-            }
-            let metadata_certs = pgp::cert::CertParser::from_bytes(&metadata[2..])
-                .map_err(pgp_error)?
-                .collect::<pgp::Result<Vec<_>>>()
-                .map_err(pgp_error)?;
-            if metadata_certs.len() != certificates.len() + 1
-                || metadata_certs[1..]
-                    .iter()
-                    .zip(&certificates)
-                    .any(|(a, b)| a.fingerprint() != b.fingerprint())
-            {
-                return Err(Error::invalid("share metadata holder order"));
-            }
-            eprintln!("✓ Bundle metadata checked");
-            helper.operation = SHARE;
-            helper.signer = Some(metadata_certs[0].clone());
-            let share = messages[index + 1]
-                .decrypt_with(&NullPolicy::new(), &mut helper)
-                .with_contexts((), "decrypt selected holder share")?;
-            if share.len() != 33 || usize::from(share[0]) != index + 1 {
-                return Err(Error::invalid("share coordinate"));
-            }
-            eprintln!("✓ Share decrypted");
-            Ok((share, bundle.threshold, index))
+            operation(&mut helper)
         },
     )
 }
+
+pub(crate) fn import_metadata(
+    certificate: &Cert,
+    message: &EncryptedMessage,
+    prompt: Rc<Mutex<Box<dyn PromptHandler>>>,
+) -> Result<Vec<u8>, Error> {
+    with_decryptor(certificate, prompt, |helper| {
+        message.decrypt_with(&NullPolicy::new(), helper).with_contexts((), "decrypt selected holder metadata")
+    })
+}
+
 
 #[cfg(test)]
 mod tests {

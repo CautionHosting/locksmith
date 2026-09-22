@@ -273,3 +273,47 @@ fn proof_bound_holder_survives_snapshot_expiry_without_changing_external_pgp() {
     let external = HolderKeyring { certificate: public, generation_time: None };
     assert!(authenticate_holder(&[external], "transport", &signature).is_err());
 }
+
+#[tokio::test]
+async fn imported_v0_recovers_original_key_and_decrypts_old_ciphertext() {
+    use crate::legacy::tests as legacy;
+    recover_legacy(legacy::imported()).await;
+}
+
+async fn recover_legacy(bundle: crate::legacy::ImportedV0) -> [u8; 32] {
+    use crate::{legacy::tests as legacy, client::{decrypt_shard, tests::prompt}};
+    let recovery = Recovery::new(&bundle).unwrap();
+    let keyrings = recovery.keyrings.clone();
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let (status_tx, mut status_rx) = tokio::sync::broadcast::channel(4);
+    let task = tokio::spawn(async move { reconstitute_shards(rx, status_tx, &recovery).await });
+    for (index, name) in ["alice", "bob"].iter().enumerate() {
+        let path = legacy::fixture(&[*name, ".private.asc"].concat());
+        let (request, keyring) = decrypt_shard(&bundle, Some(&path), prompt()).unwrap();
+        let signature = crate::openpgp::sign(&keyring, "v0-test", &mut keyfork_prompt::Headless::new(), Some(&path)).unwrap();
+        let holder = authenticate_holder(&keyrings, "v0-test", &signature).unwrap();
+        assert_eq!(holder, index);
+        assert!(matches!(submit(&tx, &mut status_rx, holder, 1, request.shard.clone()).await,
+            models::SendSignedEncryptedShardResponse::Rejected { .. }));
+        assert!(matches!(submit(&tx, &mut status_rx, holder, request.threshold, request.shard.clone()).await,
+            models::SendSignedEncryptedShardResponse::Accepted { remaining } if remaining == 1-index as u8));
+        if index == 0 {
+            assert!(!task.is_finished());
+            assert!(matches!(submit(&tx, &mut status_rx, holder, request.threshold, request.shard).await,
+                models::SendSignedEncryptedShardResponse::Rejected { .. }));
+        }
+    }
+    let secret: [u8;32] = task.await.unwrap().unwrap().try_into().unwrap();
+    assert_eq!(secret, [7;32]);
+    assert_eq!(legacy::decrypt_pre_import(secret), b"encrypted before V0 import");
+    secret
+}
+
+#[tokio::test]
+#[ignore = "requires the signed Platform round-trip fixture from test_quorum_mock.sh"]
+async fn downloaded_v0_recovers_and_decrypts() {
+    let work = std::path::PathBuf::from(std::env::var("LOCKSMITH_LEGACY_TEST_DIR").unwrap());
+    let bundle = crate::legacy::ImportedV0::from_json(&std::fs::read_to_string(work.join("v0-downloaded.json")).unwrap()).unwrap();
+    let secret = recover_legacy(bundle).await;
+    assert_eq!(crate::legacy::tests::decrypt_ciphertext(&work.join(".caution/secrets/LEGACY_ROUNDTRIP.asc"), secret), b"legacy-roundtrip");
+}

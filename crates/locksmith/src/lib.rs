@@ -4,6 +4,8 @@ mod openpgp;
 
 pub mod custody;
 pub mod bundle;
+pub mod legacy;
+mod recovery;
 pub mod client;
 pub mod server;
 

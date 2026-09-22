@@ -1,4 +1,6 @@
-use crate::{bundle::QuorumBundle, models};
+#[cfg(test)]
+use crate::bundle::QuorumBundle;
+use crate::{bundle::RecoverySource, models};
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, consts::U12},
@@ -334,11 +336,11 @@ struct Recovery {
 
 impl Recovery {
     #[cfg(test)]
-    fn new(bundle: &QuorumBundle) -> Result<Self, ReceiveShardsError> {
+    fn new(bundle: &impl RecoverySource) -> Result<Self, ReceiveShardsError> {
         Self::new_at(bundle, None)
     }
-    fn new_at(bundle: &QuorumBundle, at: Option<SystemTime>) -> Result<Self, ReceiveShardsError> {
-        let bundle = bundle.clone().to_latest();
+    fn new_at(bundle: &impl RecoverySource, at: Option<SystemTime>) -> Result<Self, ReceiveShardsError> {
+        let bundle = bundle.recovery();
         if bundle.threshold == 0
             || bundle.threshold > bundle.max
             || bundle.max > 254
@@ -491,7 +493,7 @@ async fn reconstitute_shards(
 #[tracing::instrument(skip_all)]
 pub async fn receive_shards(
     address: std::net::SocketAddr,
-    bundle: &QuorumBundle,
+    bundle: &impl RecoverySource,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
     receive_shards_at(address, bundle, None).await
 }
@@ -500,7 +502,7 @@ pub async fn receive_shards(
 /// WebAuthn snapshots require this timestamp; the legacy entry point remains PGP-only.
 pub async fn receive_shards_at(
     address: std::net::SocketAddr,
-    bundle: &QuorumBundle,
+    bundle: &impl RecoverySource,
     generation_time: Option<SystemTime>,
 ) -> Result<Vec<u8>, ReceiveShardsError> {
     let recovery = Recovery::new_at(bundle, generation_time)?;

@@ -38,8 +38,9 @@ separate integration work.
 `Containerfile` and `caution.hcl` build/run Keymaker. `Dockerfile` builds the
 Locksmith recovery daemon and requires these deployment inputs in the build context:
 
-- `.caution/quorum-bundle.json`: the complete proofed V1 Keymaker response.
-- `.caution/keymaker-pcr-policy.json`: the independently trusted policy for the
+- `.caution/quorum-bundle.json`: a complete proofed V1 response or explicit
+  [ImportedV0 artifact](docs/legacy-v0.md).
+- For V1, `.caution/keymaker-pcr-policy.json`: the independently trusted policy for the
   Keymaker build that generated that bundle.
 - Optional `.caution/secrets/*.asc`: secrets encrypted to that bundle's public key.
 
@@ -48,9 +49,11 @@ docker build --platform linux/amd64 -f Dockerfile -t locksmith:local .
 ```
 
 The image installs the bundle and policy at `/etc/caution/bundle.json` and
-`/etc/caution/keymaker-pcr-policy.json`. Missing or empty required inputs fail the
-build before compilation. Startup verifies the proof against the policy before
-listening for shares; invalid inputs still fail closed. The image always creates
+`/etc/caution/keymaker-pcr-policy.json`. A missing or empty bundle fails the build before compilation. The policy is
+packaged when present. V1 startup requires and verifies that policy and proof
+before listening; ImportedV0 startup validates its public structure and accepts
+the image-baked metadata without claiming generation provenance. Invalid inputs
+still fail closed. The image always creates
 `/etc/caution/secrets`, empty when no deployment ciphertexts are provided.
 Legacy `bundle-single.json` and `secrets/HELLO.asc` are not packaged.
 

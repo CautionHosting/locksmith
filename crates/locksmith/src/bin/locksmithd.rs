@@ -2,14 +2,16 @@ use keyfork_mnemonic::Mnemonic;
 
 #[tokio::main]
 async fn get_shards() -> Vec<u8> {
-    let policy_text = std::fs::read_to_string("/etc/caution/keymaker-pcr-policy.json")
-        .expect("has Keymaker PCR policy");
-    let policy = locksmith::bundle::KeymakerPcrPolicy::from_json(&policy_text)
-        .expect("valid Keymaker PCR policy JSON");
-    let bundle_text = std::fs::read_to_string("/etc/caution/bundle.json").expect("has bundle");
-    let response = serde_json::from_str(&bundle_text).expect("valid bundle JSON");
-    let (bundle, generation_time) = locksmith::bundle::load_response_with_timestamp(response, &policy)
-        .expect("valid verified bundle");
+    let bundle_text = std::fs::read_to_string("/etc/caution/bundle.json").expect("has image-baked bundle");
+    let legacy = locksmith::legacy::is_imported_json(&bundle_text).expect("valid bundle format");
+    let policy = if legacy { None } else {
+        let text = std::fs::read_to_string("/etc/caution/keymaker-pcr-policy.json").expect("has Keymaker PCR policy");
+        Some(locksmith::bundle::KeymakerPcrPolicy::from_json(&text).expect("valid Keymaker PCR policy JSON"))
+    };
+    // Runtime approval comes from including this exact imported artifact in the measured image.
+    let (bundle, generation_time) = locksmith::bundle::load_recovery_json(&bundle_text, policy.as_ref(), true)
+        .expect("valid image-baked bundle");
+    if legacy { tracing::warn!("Legacy V0 — no Keymaker generation proof; using image-baked recovery metadata"); }
 
     let reconstituted_secret = locksmith::server::receive_shards_at(
         "0.0.0.0:49504"

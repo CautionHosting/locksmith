@@ -13,12 +13,15 @@ COPY . /locksmith
 WORKDIR /locksmith
 RUN <<-'EOF'
 	set -eu
-	for input in .caution/quorum-bundle.json .caution/keymaker-pcr-policy.json; do
+	for input in .caution/quorum-bundle.json; do
 		test -s "$input" || { echo "Missing required deployment input: $input" >&2; exit 1; }
 	done
 	mkdir -p /rootfs/etc/caution/secrets
 	cp .caution/quorum-bundle.json /rootfs/etc/caution/bundle.json
-	cp .caution/keymaker-pcr-policy.json /rootfs/etc/caution/keymaker-pcr-policy.json
+	# V1 startup requires this policy; imported V0 deliberately has no generation proof.
+	if [ -f .caution/keymaker-pcr-policy.json ]; then
+		cp .caution/keymaker-pcr-policy.json /rootfs/etc/caution/keymaker-pcr-policy.json
+	fi
 	for secret in .caution/secrets/*.asc; do
 		[ -f "$secret" ] || continue
 		cp "$secret" /rootfs/etc/caution/secrets/

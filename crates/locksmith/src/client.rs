@@ -1,4 +1,4 @@
-use crate::{bundle::QuorumBundle, models};
+use crate::{bundle::RecoverySource, models};
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, consts::U12},
@@ -7,6 +7,7 @@ use bootproof_sdk::format::{VerifiableSignedAttestationFormat, nitro::Nitro};
 use dterror::*;
 use hkdf::Hkdf;
 use keyfork_shard::{Format, openpgp::OpenPGP};
+#[cfg(test)]
 use keymaker_models::generate_quorum::v1;
 use rand::Rng;
 use sequoia_openpgp::{
@@ -87,7 +88,7 @@ impl SendShardError {
 }
 
 pub(crate) fn decrypt_shard(
-    bundle: &v1::GenerateQuorumResponse,
+    bundle: &impl RecoverySource,
     private_key_path: Option<&std::path::Path>,
     prompt: std::rc::Rc<std::sync::Mutex<Box<dyn keyfork_prompt::PromptHandler>>>,
 ) -> Result<(models::SendShardRequest, String), SendShardError> {
@@ -95,12 +96,13 @@ pub(crate) fn decrypt_shard(
 }
 
 fn decrypt_selected_shard(
-    bundle: &v1::GenerateQuorumResponse,
+    bundle: &impl RecoverySource,
     private_key_path: Option<&std::path::Path>,
     prompt: std::rc::Rc<std::sync::Mutex<Box<dyn keyfork_prompt::PromptHandler>>>,
     holder: Option<&str>,
 ) -> Result<(models::SendShardRequest, String), SendShardError> {
     use SendShardErrorKind as Kind;
+    let bundle = bundle.recovery();
     if bundle.threshold == 0
         || bundle.threshold > bundle.max
         || bundle.max > 254
@@ -110,10 +112,10 @@ fn decrypt_selected_shard(
     }
     #[cfg(feature = "rpgpie")]
     if let (None, Some(holder)) = (private_key_path, holder) {
-        let (shard, threshold, index) = crate::openpgp::selected_card::decrypt(bundle, holder, prompt)
+        let (shard, threshold, index) = crate::openpgp::selected_card::decrypt(&bundle, holder, prompt)
             .with_contexts((), Kind::DecryptShard)?;
         let request = models::SendShardRequest { shard, threshold };
-        let keyring = signing_keyring(bundle, &request, Some(index))?;
+        let keyring = signing_keyring(&bundle, &request, Some(index))?;
         return Ok((request, keyring));
     }
     let keyring = crate::openpgp::reconstruct_keyring(&bundle.keyring)
@@ -178,17 +180,19 @@ fn decrypt_selected_shard(
     } else {
         (None, None)
     };
-    let messages = OpenPGP
-        .parse_shard_file(bundle.shardfile.as_bytes())
-        .with_contexts((), Kind::ParseShardfile)?;
-    let (share, threshold) = OpenPGP
-        .decrypt_one_shard(private_keys, &messages, prompt)
-        .with_contexts((), Kind::DecryptShard)?;
-    let request = models::SendShardRequest {
-        shard: Vec::from(&share),
-        threshold,
+    let request = if bundle.legacy {
+        let index = selected.ok_or_else(|| SendShardError::invalid(Kind::NoMatchingHolderKeys))?;
+        let private = private_keys.as_ref().and_then(|keys| keys.first())
+            .ok_or_else(|| SendShardError::invalid(Kind::NoMatchingHolderKeys))?;
+        let (shard, threshold) = crate::legacy::decrypt_share(bundle, private, index, prompt)
+            .with_contexts((), Kind::DecryptShard)?;
+        models::SendShardRequest { shard, threshold }
+    } else {
+        let messages = OpenPGP.parse_shard_file(bundle.shardfile.as_bytes()).with_contexts((), Kind::ParseShardfile)?;
+        let (share, threshold) = OpenPGP.decrypt_one_shard(private_keys, &messages, prompt).with_contexts((), Kind::DecryptShard)?;
+        models::SendShardRequest { shard: Vec::from(&share), threshold }
     };
-    let keyring = signing_keyring(bundle, &request, selected)?;
+    let keyring = signing_keyring(&bundle, &request, selected)?;
     if let Some(holder) = holder {
         let cert = sequoia_openpgp::Cert::from_bytes(keyring.as_bytes()).map_err(|_| SendShardError::invalid(Kind::NoMatchingHolderKeys))?;
         if cert.fingerprint().to_string() != holder { return Err(SendShardError::invalid(Kind::ShareHolderMismatch)); }
@@ -197,11 +201,12 @@ fn decrypt_selected_shard(
 }
 
 fn signing_keyring(
-    bundle: &v1::GenerateQuorumResponse,
+    bundle: &impl RecoverySource,
     request: &models::SendShardRequest,
     selected: Option<usize>,
 ) -> Result<String, SendShardError> {
     use SendShardErrorKind as Kind;
+    let bundle = bundle.recovery();
     if request.threshold != bundle.threshold {
         return Err(SendShardError::invalid(Kind::ShareThresholdMismatch));
     }
@@ -224,7 +229,7 @@ fn signing_keyring(
 pub async fn send_shard(
     address: std::net::SocketAddr,
     pcrs: std::collections::HashMap<u8, Vec<u8>>,
-    bundle: &QuorumBundle,
+    bundle: &impl RecoverySource,
     opt_private_key_path: Option<std::path::PathBuf>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
     send_selected_shard(address, pcrs, bundle, opt_private_key_path, None).await
@@ -233,7 +238,7 @@ pub async fn send_shard(
 pub async fn send_selected_shard(
     address: std::net::SocketAddr,
     pcrs: std::collections::HashMap<u8, Vec<u8>>,
-    bundle: &QuorumBundle,
+    bundle: &impl RecoverySource,
     opt_private_key_path: Option<std::path::PathBuf>,
     holder: Option<String>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
@@ -303,7 +308,7 @@ pub async fn send_selected_shard(
     let temp_ph = std::rc::Rc::new(std::sync::Mutex::new(
         keyfork_prompt::default_handler().expect("please give us a handler"),
     ));
-    let bundle = bundle.clone().to_latest();
+    let bundle = bundle.recovery();
     let (request, keyring) =
         decrypt_selected_shard(&bundle, opt_private_key_path.as_deref(), temp_ph.clone(), holder.as_deref())?;
 

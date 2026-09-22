@@ -7,6 +7,7 @@ pub(crate) mod selected_card;
 #[cfg(feature = "rpgpie")]
 mod card_prompt;
 mod keyring;
+pub(crate) mod legacy_decrypt;
 pub(crate) use keyring::reconstruct_keyring;
 
 #[derive(Debug, thiserror::Error)]

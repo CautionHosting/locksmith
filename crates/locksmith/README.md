@@ -1,5 +1,8 @@
 # PGP shard submission
 
+For explicit holder-assisted legacy imports, packaging and rebuild instructions,
+see [Imported V0 recovery](../../docs/legacy-v0.md).
+
 With a private-key file, the client selects the first holder in bundle order
 whose matching private certificate has both decryption and usable signing keys.
 It decrypts with only that certificate and signs against only that holder's

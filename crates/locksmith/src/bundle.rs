@@ -8,6 +8,8 @@ use serde_cbor::Value as CborValue;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
+pub use crate::recovery::{LoadedBundle, RecoverySource, RecoveryView, load_recovery_json};
+
 pub type QuorumBundle = GenerateQuorumBundle;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
