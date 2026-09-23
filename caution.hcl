@@ -1,4 +1,9 @@
 enclave "default" {
+  restart {
+    policy        = "always"
+    delay_seconds = 0
+  }
+
   build {
     app_sources = [
       "https://codeberg.org/caution/locksmith"
