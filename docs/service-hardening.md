@@ -17,84 +17,21 @@ keep their reservations. Busy requests return 503. These limits bound work and
 reduce monopolization; they do not guarantee availability during sustained floods.
 Keep session IDs private: invalid preparation deliberately consumes an attempt.
 
-## Migration (operator commands, not performed by the implementation)
+## Deployment
 
-Use the existing custody deployment checkout and its existing root quorum/CA.
-Do not generate a new custody root or replace the CA. No Keymaker change is needed
-for this migration or recovery of existing application bundles.
-
-Generate the token into a private temporary env file, then encrypt only that key:
-
-```sh
-umask 077
-TOKEN_ENV=$(mktemp /tmp/custody-token.XXXXXX)
-printf 'PUBLIC_CERTIFICATE_SERVICE_TOKEN=%s\n' "$(openssl rand -hex 32)" > "$TOKEN_ENV"
-caution secret encrypt PUBLIC_CERTIFICATE_SERVICE_TOKEN \
-  --env-file "$TOKEN_ENV" --bundle .caution/quorum-bundle.json
-```
-
-Set the **same** value in the Platform API backend `.env`. On the API host, with
-the private token file available, set `PLATFORM_ENV` to the actual backend env
-file (the local development default is `~/.config/caution/.env`):
-
-```sh
-PLATFORM_ENV="$HOME/.config/caution/.env"
-python3 - "$TOKEN_ENV" "$PLATFORM_ENV" <<'PYENV'
-from pathlib import Path
-import sys
-source, target = map(Path, sys.argv[1:])
-entry = source.read_text().strip()
-assert entry.startswith("PUBLIC_CERTIFICATE_SERVICE_TOKEN=")
-lines = target.read_text().splitlines()
-lines = [line for line in lines if line.split("=", 1)[0].strip() != "PUBLIC_CERTIFICATE_SERVICE_TOKEN"]
-target.write_text("\n".join(lines + [entry]) + "\n")
-PYENV
-```
-
-Keep the private env file until provisioning is done; never commit it. Recreate
-the API process/container using its existing deployment procedure so it reads the
-new environment. Deploying the updated Platform first is compatible with the old
-certificate endpoint.
-
-Update the custody checkout to the reviewed Locksmith revision. Use:
-
-```hcl
-command = "/start-certificate-service"
-env = {
-  PUBLIC_CERTIFICATE_SERVICE_TOKEN = env::vault("PUBLIC_CERTIFICATE_SERVICE_TOKEN")
-}
-```
-
-The updated start script, Containerfile and preflight require the encrypted token,
-not `CERTIFICATE_BOOTSTRAP`. Preserve the existing root bundle, root Keymaker policy,
-release configuration and CA. The old marker is no longer packaged; do not remove
-other secrets. Review and commit the deployment inputs before deployment:
-
-```sh
-python3 examples/certificate-service/check-inputs.py
-git push caution HEAD:main
-```
-
-Recover the custody enclave with the existing external-PGP holders, repeating
-this command and selecting each required holder:
-
-```sh
-caution secret send-shard --bundle .caution/quorum-bundle.json
-caution verify
-```
-
-Use the newly independently verified non-debug PCR0/1/2 to update Platform's
-`PUBLIC_CERTIFICATE_PCR_POLICY_PATH` file and each recovery client's recryptor
-policy. Updating Platform's environment or trust files may require recreating the
-API container to refresh mounts. The existing CA and bundle files stay unchanged.
+Follow [custody deployment](custody-deployment.md) for the separate bootstrap and
+release policies, proof checks, deployment, root unlock and client trust updates.
+The issuance token must already be provisioned in the Platform API and encrypted
+for the custody root; never commit the plaintext token.
 
 ## Manual acceptance
 
-Set the existing custody URL, and load the generated env file without echoing it:
+Set the custody URL. For the authenticated issuance check, load the existing
+private token env file without echoing it:
 
 ```sh
-CERT_URL=https://insecure-recryptor.kobl.one
-. "$TOKEN_ENV"
+CERT_URL=https://custody.example.com
+. /path/to/private/custody-token.env
 curl -sS -i --max-time 65 "$CERT_URL/health"
 curl -sS -i --max-time 65 "$CERT_URL/v1/public-certificates" \
   -H 'Content-Type: application/json' --data '{}'
@@ -122,7 +59,7 @@ In an existing application's checkout, with the application awaiting quorum:
 ```sh
 caution --verbose --qr secret send-shard \
   --bundle .caution/quorum-bundle.json \
-  --recryptor-url https://insecure-recryptor.kobl.one \
+  --recryptor-url https://custody.example.com \
   --recryptor-pcr-policy .caution/recryptor-pcr-policy.json
 ```
 
@@ -133,8 +70,7 @@ secret. Repeat after restarting the custody enclave and recovering its existing
 root. Record revisions, bundle IDs, PCRs and results. Do not load-test the public
 service to validate limits; use the automated saturation tests.
 
-Delete the private temporary env file after provisioning and testing, and unset
-`PUBLIC_CERTIFICATE_SERVICE_TOKEN` in the test shell. Token rotation requires
+Unset `PUBLIC_CERTIFICATE_SERVICE_TOKEN` in the test shell after testing. Token rotation requires
 updating both deployments; encrypted input changes require fresh measurements.
 
 ## Automated validation

@@ -2,7 +2,8 @@
 
 See [the current V1 contract](v1-contract.md) for the accepted CA-certified UID
 profile, critical-notation checks, fixed compatibility fixtures and first-test scope.
-The critical-notation patch is local; publish and align downstream pins before shipping.
+See [custody deployment](custody-deployment.md) for configuration, proof checks,
+root unlock and trust-policy updates.
 
 The existing certificate service also hosts `/v1/releases/begin`, `/prepare` and
 `/complete`. It uses the same bootstrapped Keyforkd custody root. Keymaker remains
@@ -51,7 +52,7 @@ before request-body processing (401 if absent/incorrect; 503 if the service toke
 is not configured). Release routes remain public and WebAuthn-authorized. Missing
 issuance configuration does not disable recovery in a running service. The example
 deployment requires the encrypted token as a startup input.
-See [migration and validation](service-hardening.md).
+See [hardening and acceptance checks](service-hardening.md).
 
 Recryption checks the shardfile's threshold, holder order, signature and share
 coordinate. Plaintext and derived private keys stay in the custody enclave.
