@@ -11,12 +11,54 @@ Skip this section when deploying or upgrading an existing root. For a new servic
 use a dedicated checkout without an existing root bundle. Collect independent
 root holders' public PGP certificates in `root-holders.asc`; keep their private keys
 with the holders. The root must be recoverable without this service's passkeys.
-Use a ready Keymaker and an independently verified, non-debug PCR policy:
+
+### Establish the Keymaker policy
+
+After deploying Keymaker, verify it from its own checkout against a locally
+reproduced build. Use the intended Platform backend for this and subsequent CLI
+commands (`CAUTION_BACKEND_URL` or `--url`):
+
+```sh
+cd /path/to/keymaker-checkout
+caution verify
+```
+
+Continue only after verification succeeds for the intended non-debug deployment.
+The CLI saves its verified PCR0/1/2 in `.caution/trusted_hashes.json`. Pass this file
+from the **Keymaker checkout** directly to `caution secret init` from the **new
+key-service checkout**. No JSON conversion is needed:
+
+```sh
+cd /path/to/key-service-checkout
+```
+
+Replace the checkout paths. `caution secret init` converts the flat
+`pcr0`/`pcr1`/`pcr2` input into one non-expiring set and saves the existing `sets`
+format in `.caution/keymaker-pcr-policy.json`. `verified_at` and `tls` are metadata, not
+proof of verification or a policy expiry. For multiple approved measurement sets
+or per-set cutoffs, use the existing `sets` format:
+
+```json
+{"sets":[{"pcrs":{"0":"<PCR0 hex>","1":"<PCR1 hex>","2":"<PCR2 hex>"},"expires_at_unix_seconds":null}]}
+```
+
+Add one entry per approved image, using 96 hexadecimal characters for each PCR.
+Each optional expiry is checked against the bundle's signed attestation timestamp.
+Do not mix flat PCR fields with `sets` or expiry fields; such inputs are rejected.
+Do not substitute unverified values from `/attestation`, or reuse an older saved
+file after a failed verification. Trust comes from successful verification, not
+the file format. Retain the Keymaker revision and verification record with the policy.
+
+Flat input requires an updated Caution CLI. Services and runtimes continue to
+consume the saved `sets` policy, so this convenience requires no Locksmith upgrade
+or dependency-pin change. Package the saved policy, not the original flat file.
+
+### Generate the root quorum
 
 ```sh
 caution secret init root-holders.asc --threshold 2 \
   --keymaker-url https://keymaker.example.com \
-  --keymaker-pcr-policy /path/to/verified-keymaker-policy.json --no-upload
+  --keymaker-pcr-policy /path/to/keymaker-checkout/.caution/trusted_hashes.json --no-upload
 jq -r '.data.public_key' .caution/quorum-bundle.json > .caution/caution-ca.asc
 ```
 
