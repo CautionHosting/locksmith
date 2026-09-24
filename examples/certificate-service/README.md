@@ -37,10 +37,9 @@ python3 examples/certificate-service/check-inputs.py
 ```
 
 Preflight checks packaging; CLI and runtime still verify cryptographic proofs.
-The root must be externally recoverable without this service. If starting a
-completely new disposable test, first create an external-PGP root quorum and
-encrypt the token using `caution secret encrypt PUBLIC_CERTIFICATE_SERVICE_TOKEN`; each new
-quorum consumes **one fresh Keymaker**. An existing-root upgrade consumes none.
+For a new service, follow [initial bootstrap](../../docs/key-service-deployment.md#initial-bootstrap)
+to create the external-PGP root quorum, export its public CA and provision the
+issuance token. Existing-root upgrades do not generate another quorum.
 
 ## Automated gate and manual acceptance
 

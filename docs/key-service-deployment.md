@@ -1,9 +1,46 @@
 # Deploy the certificate and share-release service
 
-Use an existing deployment checkout with an external-PGP bundle for the key service root key
-and a provisioned issuance token. See the [certificate-service example](../examples/certificate-service/README.md)
-for required inputs. Preserve the root bundle, public CA and encrypted token;
+For an existing service, preserve the root bundle, public CA and encrypted token;
 an application Keymaker upgrade does not require a new key service root key.
+See the [certificate-service example](../examples/certificate-service/README.md)
+for packaged inputs.
+
+## Initial bootstrap
+
+Skip this section when deploying or upgrading an existing root. For a new service,
+use a dedicated checkout without an existing root bundle. Collect independent
+root holders' public PGP certificates in `root-holders.asc`; keep their private keys
+with the holders. The root must be recoverable without this service's passkeys.
+Use a ready Keymaker and an independently verified, non-debug PCR policy:
+
+```sh
+caution secret init root-holders.asc --threshold 2 \
+  --keymaker-url https://keymaker.example.com \
+  --keymaker-pcr-policy /path/to/verified-keymaker-policy.json --no-upload
+jq -r '.data.public_key' .caution/quorum-bundle.json > .caution/caution-ca.asc
+```
+
+Keymaker generates the root entropy inside its enclave and encrypts its shares to
+those holders. The CLI verifies the proof and saves the bundle and bootstrap policy
+under `.caution/`. Operators receive no plaintext root. The exported public key
+identifies the CA derived from that root; retain it with the bundle and policy.
+
+Generate a separate issuance token in an existing private directory outside Git,
+then encrypt it to the root bundle. Use a new file path:
+
+```sh
+(umask 077; set -C
+ printf 'PUBLIC_CERTIFICATE_SERVICE_TOKEN=%s\n' "$(openssl rand -hex 32)" \
+   > /private/path/key-service.env)
+caution secret encrypt PUBLIC_CERTIFICATE_SERVICE_TOKEN \
+  --env-file /private/path/key-service.env
+```
+
+Set the identical token as `PUBLIC_CERTIFICATE_SERVICE_TOKEN` in Platform's private
+API configuration. Package only `.caution/secrets/PUBLIC_CERTIFICATE_SERVICE_TOKEN.asc`;
+never commit the plaintext file. The token permits certificate issuance; it is not
+the key service root key or authorization to release shares. Continue below to
+configure, deploy, verify and unlock the service with the root holders' quorum.
 
 ## Trust inputs
 

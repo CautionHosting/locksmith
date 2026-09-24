@@ -21,8 +21,8 @@ Keep session IDs private: invalid preparation deliberately consumes an attempt.
 
 Follow [key-service deployment](key-service-deployment.md) for the separate bootstrap and
 release policies, proof checks, deployment, root unlock and client trust updates.
-The issuance token must already be provisioned in the Platform API and encrypted
-for the key service root key; never commit the plaintext token.
+For a new root and issuance token, follow [initial bootstrap](key-service-deployment.md#initial-bootstrap).
+Existing services retain their root and token; never commit the plaintext token.
 
 ## Manual acceptance
 
