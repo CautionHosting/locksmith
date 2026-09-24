@@ -90,7 +90,7 @@ The public-certificate hash has no additional global structure identifier.
 A general Caution-wide identifier/hash registry is explicitly deferred. Adding
 another artifact type must not assume these V1 checks automatically separate it.
 
-Live release still requires fresh custody/destination evidence, approved PCRs,
+Live release still requires fresh key-service/destination evidence, approved PCRs,
 WebAuthn RP/origin/challenge and user verification, one-use unexpired authorization,
 and a destination-bound encrypted submission. Historical proofs and the issuance
 bearer token cannot replace those checks.
@@ -120,7 +120,7 @@ and synthetic recovery checks. No local-path overrides belong in committed files
 
 Named custodians, organizational recovery drills, long-term root/rotation
 procedures and the general registry are later work. The first test retains real
-quorum custody, enclave-only private material and all attestation/authorization
+quorum key control, enclave-only private material and all attestation/authorization
 requirements. See [service operations](service-hardening.md) and
 [recovery](share-release.md); record exact revisions/PCRs/scenarios separately
 before claiming live acceptance.
@@ -133,7 +133,7 @@ published or deployed. Tested on macOS with Homebrew `nettle@3` and `openssl@3`:
 | Check | Result |
 | --- | --- |
 | `cargo test --locked --offline -p keymaker-models -p public-cert-service -p locksmith --lib` | Models 6 passed; Locksmith 40 passed, one unrelated PTY-driver test ignored; service 19 passed |
-| `CAUTION_UNSAFE_KEY_SERVICE_E2E=1 cargo test --locked --offline -p locksmith -p public-cert-service --lib --features unsafe-e2e release::tests` | Locksmith 12 passed; actual custody HTTP/destination recovery test passed, covering mixed and WebAuthn-only quorums |
+| `CAUTION_UNSAFE_KEY_SERVICE_E2E=1 cargo test --locked --offline -p locksmith -p public-cert-service --lib --features unsafe-e2e release::tests` | Locksmith 12 passed; actual key-service HTTP/destination recovery test passed, covering mixed and WebAuthn-only quorums |
 | Platform `cargo test --locked --offline -p api org_quorum::certificates` | 7 passed using the local Locksmith patch in an isolated temporary workspace |
 
 The temporary Platform workspace patched only Locksmith/model dependency sources;

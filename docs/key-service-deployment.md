@@ -1,17 +1,17 @@
 # Deploy the certificate and share-release service
 
-Use an existing deployment checkout with an external-PGP custody-root bundle
+Use an existing deployment checkout with an external-PGP bundle for the key service root key
 and a provisioned issuance token. See the [certificate-service example](../examples/certificate-service/README.md)
 for required inputs. Preserve the root bundle, public CA and encrypted token;
-an application Keymaker upgrade does not require a new custody root.
+an application Keymaker upgrade does not require a new key service root key.
 
 ## Trust inputs
 
 | Policy | Verifies | When to change |
 | --- | --- | --- |
-| `.caution/keymaker-pcr-policy.json` | This service's custody-root bundle | Only when its root trust requirements change; retain the root's generation measurements. |
+| `.caution/keymaker-pcr-policy.json` | The bundle for the key service root key | Only when its root trust requirements change; retain the root's generation measurements. |
 | `.caution/release-keymaker-pcr-policy.json` | Application bundles presented for share release | Add independently verified application Keymaker measurements; retain approved sets needed by existing bundles. |
-| Client recryptor PCR policy | The running custody service | Refresh after verifying a changed service image or embedded configuration. |
+| Client recryptor PCR policy | The running key service | Refresh after verifying a changed service image or embedded configuration. |
 
 The two Keymaker policies are packaged separately. Replacing the bootstrap
 policy with an application policy can prevent the service from starting.
@@ -48,7 +48,7 @@ caution secret inspect --bundle /path/to/application/.caution/quorum-bundle.json
 ```
 
 Both proof checks must pass; packaging preflight alone does not verify proofs.
-Review and commit the deployment inputs, then push to the custody app's remote:
+Review and commit the deployment inputs, then push to the key-service app's remote:
 
 ```sh
 git push caution HEAD:main
@@ -62,7 +62,7 @@ each required external-PGP root holder:
 ```sh
 caution verify
 caution secret send-shard --bundle .caution/quorum-bundle.json
-curl --fail https://custody.example.com/health
+curl --fail https://key-service.example.com/health
 ```
 
 Use independently verified non-debug PCR0/1/2 for Platform's

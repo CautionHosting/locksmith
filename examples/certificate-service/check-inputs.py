@@ -12,7 +12,7 @@ try:
     if data["version"] != "V1" or not envelope["necroproof"]:
         raise ValueError("a proofed V1 root bundle is required")
     if not holders or any(set(holder) != {"OpenPGP"} for holder in holders):
-        raise ValueError("the custody root must use only external OpenPGP holders")
+        raise ValueError("the key service root key must use only external OpenPGP holders")
     if not 2 <= data["threshold"] <= data["max"] == len(holders):
         raise ValueError("this test requires at least a 2-holder threshold")
     if not data["public_key"].startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----"):

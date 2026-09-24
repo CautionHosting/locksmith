@@ -1,4 +1,4 @@
-//! Shared PGP recovery fields. V1 proof contracts and custody interfaces stay separate.
+//! Shared PGP recovery fields. V1 proof contracts and key-service interfaces stay separate.
 use crate::{
     bundle::{KeymakerPcrPolicy, load_response_with_timestamp},
     legacy::{self, Error, ImportedV0},

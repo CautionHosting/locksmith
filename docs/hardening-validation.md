@@ -56,7 +56,7 @@ tests/e2e/test_quorum_mock.sh
 | Final release admission timeout/disconnect regression | Passed |
 | Deployment-input regression | Passed: old marker alone rejected, encrypted token accepted, plaintext rejected |
 | Production certificate-service binary cargo check | Passed |
-| Existing `make test-quorum-mock` | Passed, including disposable PostgreSQL orchestration and source-patched custody recovery |
+| Existing `make test-quorum-mock` | Passed, including disposable PostgreSQL orchestration and source-patched key-service share release |
 | Changed-file whitespace and mock shell syntax | Passed |
 
 The full mock suite ran from an isolated Platform copy with Cargo path patches for
@@ -78,7 +78,7 @@ up its local services. Existing compiler warnings were not changed.
 ## Remaining operator acceptance
 
 Follow [migration and manual acceptance](service-hardening.md). Preserve the
-existing custody root, CA and quorum bundle; provision the token, deploy Platform
+existing key service root key, CA and quorum bundle; provision the token, deploy Platform
 and the combined certificate/recryptor service, recover the root and update trusted
 PCR policies. Verify issuance/recovery, then repeat recovery after enclave restart.
 No new PCR measurements, hardware passkey run, enclave build or Nitro deployment

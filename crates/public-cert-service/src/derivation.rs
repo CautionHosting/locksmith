@@ -118,7 +118,7 @@ pub enum DeterministicBundleHashError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DerivePublicCertificateError {
-    #[error("custody root unavailable")]
+    #[error("key service root key unavailable")]
     Unavailable(#[source] crate::service::Error),
     #[error("failed to connect to keyforkd")]
     ConnectKeyforkd(#[source] keyforkd_client::Error),
@@ -258,7 +258,7 @@ pub(crate) fn derive_public_certificate_until(
         crate::service::root_ca(deadline).map_err(DerivePublicCertificateError::Unavailable)?;
     if expected_ca.is_some_and(|expected| expected.fingerprint() != ca_cert.fingerprint()) {
         return Err(DerivePublicCertificateError::Unavailable(
-            crate::service::Error::unavailable("configured CA does not match custody root"),
+            crate::service::Error::unavailable("configured CA does not match key service root key"),
         ));
     }
     let key_flags = public_certificate_key_flags();

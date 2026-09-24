@@ -1,5 +1,5 @@
 //! Enclave-owned, single-use WebAuthn authorization for one destination-bound share.
-//! Keep this state inside the custody enclave. A Platform login is never release authorization.
+//! Keep this state inside the key-service enclave. A Platform login is never release authorization.
 pub mod crypto;
 mod protocol;
 pub use protocol::*;

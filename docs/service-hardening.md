@@ -19,21 +19,21 @@ Keep session IDs private: invalid preparation deliberately consumes an attempt.
 
 ## Deployment
 
-Follow [custody deployment](custody-deployment.md) for the separate bootstrap and
+Follow [key-service deployment](key-service-deployment.md) for the separate bootstrap and
 release policies, proof checks, deployment, root unlock and client trust updates.
 The issuance token must already be provisioned in the Platform API and encrypted
-for the custody root; never commit the plaintext token.
+for the key service root key; never commit the plaintext token.
 
 ## Manual acceptance
 
-Set the custody URL. For the authenticated issuance check, load the existing
+Set the key-service URL. For the authenticated issuance check, load the existing
 private token env file without echoing it:
 
 ```sh
-CERT_URL=https://custody.example.com
-. /path/to/private/custody-token.env
-curl -sS -i --max-time 65 "$CERT_URL/health"
-curl -sS -i --max-time 65 "$CERT_URL/v1/public-certificates" \
+KEY_SERVICE_URL=https://key-service.example.com
+. /path/to/private/key-service-token.env
+curl -sS -i --max-time 65 "$KEY_SERVICE_URL/health"
+curl -sS -i --max-time 65 "$KEY_SERVICE_URL/v1/public-certificates" \
   -H 'Content-Type: application/json' --data '{}'
 ```
 
@@ -45,7 +45,7 @@ out of curl's command-line arguments:
 ```sh
 printf 'Authorization: Bearer %s\n' "$PUBLIC_CERTIFICATE_SERVICE_TOKEN" | \
   curl --silent --show-error --fail-with-body --max-time 65 \
-    "$CERT_URL/v1/public-certificates" --header @- \
+    "$KEY_SERVICE_URL/v1/public-certificates" --header @- \
     -H 'Content-Type: application/json' \
     --data '{"version":"V1","organization_id":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],"certificate_count":1}'
 ```
@@ -59,14 +59,14 @@ In an existing application's checkout, with the application awaiting quorum:
 ```sh
 caution --verbose --qr secret send-shard \
   --bundle .caution/quorum-bundle.json \
-  --recryptor-url https://custody.example.com \
+  --recryptor-url https://key-service.example.com \
   --recryptor-pcr-policy .caution/recryptor-pcr-policy.json
 ```
 
 Select a passkey holder. Reaching the release-approval QR exercises begin/prepare
 and client-side evidence verification. Approve to exercise complete and submit a
 share; supply the remaining quorum shares and check the expected application
-secret. Repeat after restarting the custody enclave and recovering its existing
+secret. Repeat after restarting the key-service enclave and recovering its existing
 root. Record revisions, bundle IDs, PCRs and results. Do not load-test the public
 service to validate limits; use the automated saturation tests.
 

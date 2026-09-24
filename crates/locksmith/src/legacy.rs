@@ -379,7 +379,7 @@ pub(crate) fn decrypt_share(
     }
     for (cert, key) in certs.iter().zip(view.keyring) {
         let Key::OpenPGP { cert: expected } = key else {
-            return Err(Error::invalid("legacy custody must be PGP"));
+            return Err(Error::invalid("legacy approval method must be PGP"));
         };
         if cert != &Cert::from_bytes(expected).map_err(pgp_error)? {
             return Err(Error::invalid(

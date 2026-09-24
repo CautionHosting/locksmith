@@ -126,7 +126,7 @@ fn readiness_tracks_root_identity_and_keyfork_availability() {
                 serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
                 serde_json::json!({"status":"ready", "service":"public-cert-service"})
             );
-            // Recreating the HTTP service preserves the existing enclave custody root.
+            // Recreating the HTTP service preserves the existing key service root key.
             AppState {
                 expected_ca: Some(ca),
                 ..test_state()

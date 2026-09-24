@@ -2,11 +2,11 @@
 
 See [the current V1 contract](v1-contract.md) for the accepted CA-certified UID
 profile, critical-notation checks, fixed compatibility fixtures and first-test scope.
-See [custody deployment](custody-deployment.md) for configuration, proof checks,
+See [key-service deployment](key-service-deployment.md) for configuration, proof checks,
 root unlock and trust-policy updates.
 
 The existing certificate service also hosts `/v1/releases/begin`, `/prepare` and
-`/complete`. It uses the same bootstrapped Keyforkd custody root. Keymaker remains
+`/complete`. It uses the same bootstrapped Keyforkd key service root key. Keymaker remains
 single-use and is not called during recovery, retries or restarts.
 
 Set `CAUTION_RELEASE_CONFIG` to an immutable image file containing `rp_id`, `origin`,
@@ -29,7 +29,7 @@ assertion, requires verified UV, then derives only the selected private key.
 Failed and concurrent attempts cannot reuse authorization. Restart invalidates
 pending requests. Multiple passkeys on a holder authorize the same share.
 
-The custody root lives in Keyfork for the enclave's lifetime. Restarting only the
+The key service root key lives in Keyfork for the enclave's lifetime. Restarting only the
 HTTP process invalidates pending approvals but retains that root. Restarting the
 enclave requires fresh external-PGP quorum recovery of the existing root bundle;
 it does not require generating a new bundle or calling Keymaker.
@@ -55,7 +55,7 @@ deployment requires the encrypted token as a startup input.
 See [hardening and acceptance checks](service-hardening.md).
 
 Recryption checks the shardfile's threshold, holder order, signature and share
-coordinate. Plaintext and derived private keys stay in the custody enclave.
+coordinate. Plaintext and derived private keys stay in the key-service enclave.
 The response is the unchanged Locksmith holder-signed X25519/HKDF/AES-GCM
 request, relayed on the destination connection used for attestation.
 
@@ -75,7 +75,7 @@ evidence reused under another authorization session's transport nonce.
 and stalled Keyfork, and generation admission after timeout or cancellation.
 
 `CAUTION_UNSAFE_KEY_SERVICE_E2E=1 cargo test -p public-cert-service --lib --features unsafe-e2e release::tests`
-runs the actual custody HTTP handlers and Locksmith TCP receiver with the same
+runs the actual key-service HTTP handlers and Locksmith TCP receiver with the same
 test Keyforkd root: WebAuthn-only and mixed recovery, below-threshold locking,
 second-passkey duplicate-holder rejection, replay rejection and expected secret
 reconstruction. No Keymaker or deployed service is used.
@@ -92,7 +92,7 @@ Acceptance applies to the exact revisions and measurements in that record.
 Credential rotation, multi-instance state and production root management remain
 separate work; #7/#10/#11/#12 are not closed by this change.
 
-## Durable custody identities
+## Durable key-service identities
 
 WebAuthn holder snapshots are validated at authenticated Keymaker generation time.
 The CLI and receiver verify current transport signatures against those exact
@@ -112,7 +112,7 @@ External-PGP smartcard and private-key signing use the certificate's accepted
 hash preferences when available, otherwise SHA-512. This permits signing with
 older certificates that omit hash preferences. To use this client-side fix,
 update Platform's pinned Locksmith revision and rebuild the CLI; existing bundles,
-the custody root and deployed services do not need replacement.
+the key service root key and deployed services do not need replacement.
 
 ## Smartcard prompt progress
 
@@ -179,7 +179,7 @@ CAUTION_UNSAFE_KEY_SERVICE_E2E=1 cargo test --locked -p locksmith --lib --featur
 The tests cover independent KDF variations, canonical certified indices and
 invalid contexts, and synthetic subset/reordered/mixed release through assertion
 verification and share re-encryption. Synthetic tests supply fixture private keys;
-they do not establish live custody-key provisioning or Nitro behavior.
+they do not establish live key-service key provisioning or Nitro behavior.
 
 Validation on 2026-09-19: Keymaker's host suite passed (10 tests), including
 within-holder KDF variants, cross-holder rejection in both orders, and real 1-of-1

@@ -59,7 +59,7 @@ checks. Default release selection prefers the imported `.caution/quorum-bundle.j
 over the preserved raw `.caution/secrets/bundle.json`; `--bundle` remains explicit.
 
 The standalone `locksmith` developer CLI remains V1-only; use `caution` for legacy
-operations. WebAuthn, custody, Bootproof, V1 generation and V1 proof interfaces
+operations. WebAuthn, key-service, Bootproof, V1 generation and V1 proof interfaces
 are unchanged. Earlier V1 formats are not migrated.
 
 ## Release gate

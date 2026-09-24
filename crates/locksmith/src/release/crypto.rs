@@ -1,4 +1,4 @@
-//! Software-only custody operation. The caller must invoke this only after enclave authorization.
+//! Software-only key-service operation. The caller must invoke this only after enclave authorization.
 use super::{Context, Error};
 use crate::models::*;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
@@ -18,7 +18,7 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 fn pgp_error(source: anyhow::Error) -> Error {
     Error::from_contexts(
         (),
-        "OpenPGP custody operation",
+        "OpenPGP key-service operation",
         std::panic::Location::caller(),
         source.into(),
     )

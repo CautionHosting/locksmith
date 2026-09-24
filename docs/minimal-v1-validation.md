@@ -46,7 +46,7 @@ candidate/deployment is required to continue, followed by holder passkey approva
 Local and synthetic success is not live Nitro evidence; no new measurements are
 claimed here.
 
-Reuse the existing external-PGP custody root and test deployment inputs. Record
+Reuse the existing external-PGP key service root key and test deployment inputs. Record
 the deployed candidate revision and independently verified non-debug PCR0/1/2,
 then exercise certificate creation, mixed recovery, below-threshold locking,
 expected secret reconstruction, and recovery after enclave restart. Passkey

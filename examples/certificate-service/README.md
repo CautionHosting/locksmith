@@ -1,7 +1,7 @@
 # Certificate and share-release service
 
 This example runs certificate derivation and WebAuthn-authorized share recryption
-in the same enclave, using the same externally bootstrapped Keyforkd custody root.
+in the same enclave, using the same externally bootstrapped Keyforkd key service root key.
 **Deployment remains gated on final Platform dependency pins and automated tests.**
 It does not implement production root management or close #7/#10/#11/#12.
 
@@ -60,7 +60,7 @@ it is not permission to release a share. See [migration and acceptance](../../do
 
 The encrypted token replaces the old fixed bootstrap marker: its `env::vault`
 reference still enables Locksmith and gates application startup on root recovery.
-The token is not the custody root and cannot replace the external-PGP quorum.
+The token is not the key service root key and cannot replace the external-PGP quorum.
 
 Startup verifies the configured CA against the recovered Keyfork root before
 serving. `/health` caches success and failure for two seconds and returns 503 if that root
@@ -86,4 +86,4 @@ required by the current Locksmith dependency graph. The deployable example
 normalizes public configuration and encrypted bootstrap files to `0644`, and
 directories/start script to `0755`, before copying them into the runtime image.
 Host umask must not change the measured configuration. This does not change the
-custody root or the `/etc/caution` configuration layout.
+key service root key or the `/etc/caution` configuration layout.

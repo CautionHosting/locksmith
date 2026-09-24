@@ -1,4 +1,4 @@
-//! Durable custody identities. Certificate expiry is checked when a holder enters
+//! Durable key-service identities. Certificate expiry is checked when a holder enters
 //! a verified bundle, not when its share is released. Live authorization remains
 //! the responsibility of the release protocol and destination session.
 use crate::release::Error;
@@ -13,7 +13,7 @@ use std::time::SystemTime;
 pub(crate) fn pgp_error(source: anyhow::Error) -> Error {
     Error::from_contexts(
         (),
-        "custody certificate verification",
+        "key-service certificate verification",
         std::panic::Location::caller(),
         source.into(),
     )
@@ -90,7 +90,7 @@ pub fn verify_holder_signature(
     {
         Ok(())
     } else {
-        Err(Error::invalid("invalid custody holder signature"))
+        Err(Error::invalid("invalid key-service holder signature"))
     }
 }
 

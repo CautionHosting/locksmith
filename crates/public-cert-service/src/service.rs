@@ -1,4 +1,4 @@
-//! Bounded service work; the custody root remains owned by the enclave runtime.
+//! Bounded service work; the key service root key remains owned by the enclave runtime.
 use dterror::{FromContexts, ResultExt};
 use keyfork_derive_openpgp::XPrvKey;
 use keyfork_derive_util::DerivationPath;
@@ -88,14 +88,14 @@ pub(crate) fn root_ca(deadline: Instant) -> Result<Cert, Error> {
         &crate::derivation::public_certificate_key_flags(),
         &sequoia_openpgp::packet::UserID::from("Caution default OpenPGP CA"),
     )
-    .with_contexts((), "derive custody CA")
+    .with_contexts((), "derive key-service CA")
 }
 
 pub(crate) fn check_root(expected: Option<&Cert>, deadline: Instant) -> Result<(), Error> {
     let actual = root_ca(deadline)?;
     if expected.is_some_and(|ca| ca.fingerprint() != actual.fingerprint()) {
         return Err(Error::unavailable(
-            "configured CA does not match custody root",
+            "configured CA does not match key service root key",
         ));
     }
     remaining(deadline)?;
