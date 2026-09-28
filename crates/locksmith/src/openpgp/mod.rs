@@ -68,7 +68,7 @@ strike! {
     #[error("could not verify message ({kind:?}) [{location}]")]
     pub struct VerifyError {
         pub kind: #[non_exhaustive] pub enum VerifyErrorKind {
-            IncompatibleDrift,
+            SignatureFromFuture,
             LoadCertificates,
             InvalidSignatureCount,
             LoadSignatures,

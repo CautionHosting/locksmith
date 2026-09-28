@@ -339,3 +339,169 @@ async fn legacy_expired_nonparticipant_does_not_block_import_or_restart_recovery
         assert_eq!(task.await.unwrap().unwrap(), [7; 32]);
     }
 }
+
+#[test]
+fn signature_rejections_distinguish_clock_invalid_and_ambiguous() {
+    let cert = holder();
+    let other = holder();
+    let recovery = Recovery::new(&bundle(vec![entry(&other), entry(&cert)], 2)).unwrap();
+    let mut signer = cert
+        .keys()
+        .secret()
+        .nth(1)
+        .unwrap()
+        .key()
+        .clone()
+        .into_keypair()
+        .unwrap();
+    // Far from the boundary; exact 60/61-second tests use an injected clock.
+    let signature = SignatureBuilder::new(SignatureType::Binary)
+        .set_signature_creation_time(SystemTime::now() + std::time::Duration::from_secs(3600))
+        .unwrap()
+        .sign_message(&mut signer, b"payload")
+        .unwrap();
+    let mut armor = armor::Writer::new(Vec::new(), armor::Kind::Signature).unwrap();
+    sequoia_openpgp::Packet::Signature(signature)
+        .serialize(&mut armor)
+        .unwrap();
+    let signature = String::from_utf8(armor.finalize().unwrap()).unwrap();
+    let error = authenticate_holder(&recovery.keyrings, "payload", &signature).unwrap_err();
+    assert!(matches!(
+        error.kind,
+        ReceiveShardsErrorKind::SignatureClockSkew
+    ));
+    assert_eq!(
+        error.signature_rejection_reason(),
+        "Signature is more than 60 seconds ahead of the enclave clock; check signer and enclave clocks"
+    );
+    assert!(error.source.is_some());
+    // A subsequent unrelated-holder failure must not hide the clock diagnosis.
+    let reversed = recovery.keyrings.iter().cloned().rev().collect::<Vec<_>>();
+    assert!(matches!(
+        authenticate_holder(&reversed, "payload", &signature)
+            .unwrap_err()
+            .kind,
+        ReceiveShardsErrorKind::SignatureClockSkew
+    ));
+
+    let error = authenticate_holder(&recovery.keyrings, "tampered", &signature).unwrap_err();
+    assert!(matches!(
+        error.kind,
+        ReceiveShardsErrorKind::InvalidSignature
+    ));
+    assert_eq!(
+        error.signature_rejection_reason(),
+        "Signature did not verify for any bundle holder"
+    );
+    assert!(error.source.is_some());
+
+    let repeated = Recovery::new(&bundle(vec![entry(&cert), entry(&cert)], 2)).unwrap();
+    let error =
+        authenticate_holder(&repeated.keyrings, "payload", &sign(&cert, "payload")).unwrap_err();
+    assert!(matches!(
+        error.kind,
+        ReceiveShardsErrorKind::AmbiguousSignature
+    ));
+    assert_eq!(
+        error.signature_rejection_reason(),
+        "Signature matches multiple bundle holders"
+    );
+}
+
+#[test]
+fn four_day_old_bundle_accepts_a_fresh_external_contribution() {
+    let generated = SystemTime::now() - std::time::Duration::from_secs(4 * 86400);
+    let (cert, _) = CertBuilder::new()
+        .set_creation_time(generated)
+        .add_userid("aged bundle holder")
+        .add_signing_subkey()
+        .generate()
+        .unwrap();
+    let recovery = Recovery::new_at(&bundle(vec![entry(&cert)], 1), Some(generated)).unwrap();
+    assert_eq!(
+        authenticate_holder(&recovery.keyrings, "payload", &sign(&cert, "payload")).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn rejection_logs_keep_causes_without_payloads_or_successful_mismatches() {
+    // Other tests install tracing subscribers; isolate global callsite interest.
+    const CHILD: &str = "LOCKSMITH_REJECTION_LOG_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "server::tests::rejection_logs_keep_causes_without_payloads_or_successful_mismatches"])
+            .env(CHILD, "1")
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    #[derive(Clone)]
+    struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = Capture(bytes.clone());
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    let cert = holder();
+    let recovery = Recovery::new(&bundle(vec![entry(&cert), entry(&holder())], 2)).unwrap();
+    let data = "private payload sentinel";
+    let signature = sign(&cert, data);
+    tracing::subscriber::with_default(subscriber, || {
+        assert_eq!(
+            authenticate_holder(&recovery.keyrings, data, &signature).unwrap(),
+            0
+        );
+        assert!(bytes.lock().unwrap().is_empty());
+        assert!(
+            authenticate_holder(&recovery.keyrings, "tampered payload sentinel", &signature)
+                .is_err()
+        );
+        let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("holder signature verification failed"));
+        assert!(logs.contains("invalid holder signature"));
+        assert!(!logs.contains("payload sentinel"));
+        assert!(!logs.contains("BEGIN PGP SIGNATURE"));
+        assert!(!logs.contains(&signature));
+
+        for holders in [1, 254] {
+            let keyrings = vec![recovery.keyrings[0].clone(); holders];
+            for size in [4096, 16384] {
+                bytes.lock().unwrap().clear();
+                let armor = [
+                    "-----BEGIN PGP SIGNATURE-----\n",
+                    &"X".repeat(size),
+                    "\n\nAAAA\n-----END PGP SIGNATURE-----\n",
+                ]
+                .concat();
+                let error = authenticate_holder(&keyrings, data, &armor).unwrap_err();
+                assert_eq!(error.signature_log_cause(), "invalid signature armor");
+                let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+                assert_eq!(logs.lines().count(), 1);
+                assert!(logs.len() <= 512, "diagnostic must have a fixed size bound");
+                assert!(logs.contains("invalid signature armor"));
+                assert!(!logs.contains("BEGIN PGP"));
+                assert!(!logs.contains("XXXX"));
+                assert!(!logs.contains("88, 88"));
+                assert!(!logs.contains("payload sentinel"));
+            }
+        }
+    });
+}

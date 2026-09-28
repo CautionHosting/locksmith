@@ -47,6 +47,8 @@ strike! {
             GenerateAttestation,
             FailedSendRejection,
             InvalidSignature,
+            SignatureClockSkew,
+            AmbiguousSignature,
             DeserializeSignedPayload,
             HkdfExpansionInvalid,
             HexDecodePayload,
@@ -203,7 +205,7 @@ async fn handle_client(
             crate::send(
                 &mut client,
                 models::SendSignedEncryptedShardResponse::Rejected {
-                    reason: "Signature must identify exactly one bundle holder".into(),
+                    reason: error.signature_rejection_reason().into(),
                 },
             )
             .await
@@ -292,14 +294,64 @@ fn authenticate_holder(
     data: &str,
     signature: &str,
 ) -> Result<usize, ReceiveShardsError> {
-    let mut matches = keyrings.iter().enumerate().filter_map(|(index, keyring)| {
-        keyring.verify(data, signature)
-            .is_ok()
-            .then_some(index)
-    });
-    match (matches.next(), matches.next()) {
-        (Some(holder), None) => Ok(holder),
-        _ => Err(recovery_error(ReceiveShardsErrorKind::InvalidSignature)),
+    let mut holder = None;
+    let mut rejection = recovery_error(ReceiveShardsErrorKind::InvalidSignature);
+    for (index, keyring) in keyrings.iter().enumerate() {
+        match keyring.verify(data, signature) {
+            Ok(()) if holder.is_some() => {
+                tracing::warn!("signature matches multiple bundle holders");
+                return Err(recovery_error(ReceiveShardsErrorKind::AmbiguousSignature));
+            }
+            Ok(()) => holder = Some(index),
+            Err(error) => {
+                if matches!(error.kind, ReceiveShardsErrorKind::SignatureClockSkew)
+                    || rejection.source.is_none()
+                {
+                    rejection = error;
+                }
+            }
+        }
+    }
+    if let Some(holder) = holder {
+        return Ok(holder);
+    }
+    // Parser errors can contain entire attacker-controlled armor buffers. Emit
+    // one fixed-category diagnostic per rejection, independent of holder count.
+    tracing::warn!(
+        holders_checked = keyrings.len(),
+        cause = rejection.signature_log_cause(),
+        "holder signature verification failed"
+    );
+    Err(rejection)
+}
+
+impl ReceiveShardsError {
+    fn signature_log_cause(&self) -> &'static str {
+        use crate::openpgp::VerifyErrorKind;
+        let verification = self
+            .source
+            .as_ref()
+            .and_then(|source| source.downcast_ref::<crate::openpgp::VerifyError>());
+        match verification.map(|error| &error.kind) {
+            Some(VerifyErrorKind::SignatureFromFuture) => "signature clock skew",
+            Some(VerifyErrorKind::LoadCertificates) => "invalid holder certificate",
+            Some(VerifyErrorKind::LoadSignatures) => "invalid signature armor",
+            Some(VerifyErrorKind::InvalidSignatureCount) => "invalid signature count",
+            Some(VerifyErrorKind::AllSignaturesInvalid { .. }) => "invalid holder signature",
+            None => "holder certificate or signature verification failed",
+        }
+    }
+
+    fn signature_rejection_reason(&self) -> &'static str {
+        match self.kind {
+            ReceiveShardsErrorKind::SignatureClockSkew => {
+                "Signature is more than 60 seconds ahead of the enclave clock; check signer and enclave clocks"
+            }
+            ReceiveShardsErrorKind::AmbiguousSignature => {
+                "Signature matches multiple bundle holders"
+            }
+            _ => "Signature did not verify for any bundle holder",
+        }
     }
 }
 
@@ -318,13 +370,21 @@ struct HolderKeyring {
     generation_time: Option<SystemTime>,
 }
 impl HolderKeyring {
-    fn verify(&self, data: &str, signature: &str) -> Result<(), crate::release::Error> {
+    fn verify(&self, data: &str, signature: &str) -> Result<(), ReceiveShardsError> {
         if let Some(at) = self.generation_time {
-            crate::custody::verify_holder_signature(&self.certificate, data, signature, at)?;
+            crate::custody::verify_holder_signature(&self.certificate, data, signature, at)
+                .with_contexts((), ReceiveShardsErrorKind::InvalidSignature)
         } else {
-            crate::openpgp::verify_detached(&self.certificate, data, signature).with_contexts((), "external holder signature")?;
+            crate::openpgp::verify_detached(&self.certificate, data, signature).map_err(|source| {
+                let kind = match source.kind {
+                    crate::openpgp::VerifyErrorKind::SignatureFromFuture => {
+                        ReceiveShardsErrorKind::SignatureClockSkew
+                    }
+                    _ => ReceiveShardsErrorKind::InvalidSignature,
+                };
+                ReceiveShardsError::from_contexts((), kind, Location::caller(), Box::new(source))
+            })
         }
-        Ok(())
     }
 }
 

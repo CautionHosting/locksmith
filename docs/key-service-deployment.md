@@ -11,6 +11,30 @@ This procedure is for operators deploying the key service and its Keymaker.
 Users of hosted Keymaker generation do not construct the operator's generation
 policy; self-hosting users must establish their own verified policy.
 
+With an updated Platform API and CLI, hosted-service users can run:
+
+```sh
+export CAUTION_BACKEND_URL=https://platform.example.com
+caution verify --service keymaker
+caution verify --service key-service
+```
+
+With `CAUTION_BACKEND_URL` exported, `--url` is optional. An explicit `--url`
+overrides the environment variable for that command. Replace the placeholder URL
+with your Platform endpoint.
+
+These commands discover the endpoint, ask before reproducing the advertised pinned
+source, verify fresh attestation, and ask before saving client trust shared by
+projects on that Platform. First-use hosted creation/passkey release offers the
+same setup.
+
+This client setup leaves application measurements and existing bundle policies
+unchanged. It does **not** install operator policies or `caution-ca` on Platform,
+configure gateway release trust, or package policies in the key-service image.
+Continue with the operator steps below; retain historical generation policies
+when approving newer service images. `caution secret inspect` checks a bundle
+against the existing project policy or saved Keymaker trust.
+
 Skip this section when deploying or upgrading an existing root. For a new service,
 use a dedicated checkout without an existing root bundle. Select external PGP root
 holders using registered organization keys, a local public keyring, or both, as
@@ -310,6 +334,16 @@ Use independently verified non-debug PCR0/1/2 for Platform's
 CLI `--recryptor-pcr-policy` files. Reload affected services to pick up changed
 configuration. Do not reuse the previous image's measurements after an image change.
 An enclave restart requires the same root quorum again; no new Keymaker is needed.
+
+Share submission remains supported after an enclave has been waiting for days.
+External-PGP signatures allow up to 60 seconds of future clock skew; a larger
+skew is rejected with a clock-specific message. Check the signer and enclave
+clocks if this occurs. Receiver fixes require rebuilding, redeploying and verifying
+the application enclave, then resubmitting the existing quorum shares. Preserve
+the bundle and encrypted secrets.
+Each rejected submission logs one bounded cause category, without raw parser input,
+payloads or signatures, regardless of the number of holders.
+
 See [acceptance checks](service-hardening.md#manual-acceptance) for issuance and
 application share release. Updating CLI or Platform dependencies alone does not
 redeploy this service.

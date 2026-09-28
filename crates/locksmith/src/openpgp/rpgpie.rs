@@ -282,27 +282,26 @@ pub fn sign(
     Ok(String::from_utf8(signature_armored_bytes).expect("ASCII armored values are always utf8"))
 }
 
-// Use the current system time, minus 60 seconds to account for drift, before ensuring a signature
-// is valid.
-pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), VerifyError> {
-    use VerifyErrorKind as ErrorKind;
-    // TODO: make use of this in combination with creation timestamp
-    let now = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(60))
-        .ok_or(VerifyError {
-            kind: ErrorKind::IncompatibleDrift,
-            source: None,
-            location: Location::caller(),
-        })?;
+/// Allow the same future clock skew as the WebAuthn holder verifier.
+const MAX_SIGNATURE_FUTURE_SKEW_SECS: u32 = 60;
 
+pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), VerifyError> {
+    verify_detached_at(certs, data, signature, pgp::types::Timestamp::now())
+}
+
+fn verify_detached_at(
+    certs: &str,
+    data: &str,
+    signature: &str,
+    now: pgp::types::Timestamp,
+) -> Result<(), VerifyError> {
+    use VerifyErrorKind as ErrorKind;
     let certificates = Certificate::load(&mut std::io::Cursor::new(certs))
         .with_contexts((), ErrorKind::LoadCertificates)?
         .into_iter()
         .map(Checked::from)
         .collect::<Vec<_>>();
 
-    // NOTE: .try_into() returns the Vec as the Err variant, which isn't std::error::Error.
-    // This isn't my prettiest code, for sure.
     let [signature] = &rpgpie::signature::load(&mut std::io::Cursor::new(signature))
         .with_contexts((), ErrorKind::LoadSignatures)?[..]
     else {
@@ -313,40 +312,47 @@ pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), V
         });
     };
 
-    let mut has_valid_signature = false;
     let mut validation_errors = vec![];
-
     for cert in certificates {
-        if let Some(creation_timestamp) = signature.created() {
-            // verify that the certificate is valid when the signature was created
-            // NOTE: we don't check that certificates are valid _at this point in time_.
-            // should we? having to update a bundle would lead to misreproduction in enclaves.
-
-            // NOTE: rpgpie does not verify that certificates are valid at time of signature
-            for verification in cert
-                .valid_signing_capable_component_keys_at(creation_timestamp)
-                .into_iter()
-                .map(|verifier| verifier.verify(signature, data.as_bytes()))
-            {
-                if let Err(e) = verification {
-                    validation_errors.push(e.into());
-                } else {
-                    has_valid_signature = true;
+        if let Some(created) = signature.created() {
+            // Preserve eligibility at signing time, including certificate validity,
+            // revocation, signing capability and the subkey's binding/back-signature.
+            for verifier in cert.valid_signing_capable_component_keys_at(created) {
+                let key = verifier.as_componentkey();
+                if created < cert.primary_creation_time() || created < key.created_at() {
+                    continue;
+                }
+                // Component verification retains algorithm policy and cryptography.
+                // SignatureVerifier::verify adds a zero-skew clock check, so enforce
+                // its temporal bounds here instead, without changing the signed data.
+                match key.verify(signature, data.as_bytes()) {
+                    Err(error) => validation_errors.push(error.into()),
+                    Ok(()) => {
+                        let ahead_seconds = created.as_secs().saturating_sub(now.as_secs());
+                        if ahead_seconds > MAX_SIGNATURE_FUTURE_SKEW_SECS {
+                            return Err(VerifyError {
+                                kind: ErrorKind::SignatureFromFuture,
+                                source: None,
+                                location: Location::caller(),
+                            });
+                        }
+                        return Ok(());
+                    }
                 }
             }
         }
     }
 
-    if !has_valid_signature {
-        return Err(VerifyError {
-            kind: VerifyErrorKind::AllSignaturesInvalid { validation_errors },
-            source: None,
-            location: Location::caller(),
-        });
-    }
-
-    return Ok(());
+    Err(VerifyError {
+        kind: ErrorKind::AllSignaturesInvalid { validation_errors },
+        source: None,
+        location: Location::caller(),
+    })
 }
+
+#[cfg(test)]
+#[path = "signature_time_tests.rs"]
+mod signature_time_tests;
 
 #[cfg(test)]
 mod tests {
