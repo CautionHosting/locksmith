@@ -13,8 +13,8 @@ try:
         raise ValueError("a proofed V1 root bundle is required")
     if not holders or any(set(holder) != {"OpenPGP"} for holder in holders):
         raise ValueError("the key service root key must use only external OpenPGP holders")
-    if not 2 <= data["threshold"] <= data["max"] == len(holders):
-        raise ValueError("this test requires at least a 2-holder threshold")
+    if not 1 <= data["threshold"] <= data["max"] == len(holders):
+        raise ValueError("root threshold must be between one and the holder count")
     if not data["public_key"].startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----"):
         raise ValueError("root public certificate is missing")
     policy = json.loads((root / ".caution/keymaker-pcr-policy.json").read_text())
@@ -28,9 +28,8 @@ try:
     release = json.loads((root / ".caution/release-config.json").read_text())
     if not release["origin"].startswith("https://") or not release["rp_id"]:
         raise ValueError("configure the registered HTTPS Platform origin and RP ID")
-    if release["keymaker_policy_path"] != "/etc/caution/release-keymaker-pcr-policy.json" or release["ca_cert_path"] != "/etc/caution/caution-ca.asc":
-        raise ValueError("release configuration must use the packaged verifier inputs")
-    json.loads((root / ".caution/release-keymaker-pcr-policy.json").read_text())["sets"]
+    if release["keymaker_policy_path"] != "/etc/caution/keymaker-pcr-policy.json" or release["ca_cert_path"] != "/etc/caution/caution-ca.asc":
+        raise ValueError("release configuration must use the shared Keymaker policy and packaged CA")
     if not (root / ".caution/caution-ca.asc").read_text().startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----"):
         raise ValueError("public Caution CA certificate is missing")
     token = root / ".caution/secrets/PUBLIC_CERTIFICATE_SERVICE_TOKEN.asc"

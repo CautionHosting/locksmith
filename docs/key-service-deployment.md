@@ -221,40 +221,84 @@ release shares.
 | --- | --- | --- |
 | Platform API `KEYMAKER_PCR_POLICY_PATH` | Bundles generated through or uploaded to Platform | Add verified Keymaker measurements before using a new image; retain approved sets needed by existing bundles. |
 | Platform API `CAUTION_CA_CERT_PATH` | Holder certificates issued by the key service | Provision the exported public CA when establishing a new service root; an image-only upgrade retains it. |
-| `.caution/keymaker-pcr-policy.json` | The bundle for the key service root key | Only when its root trust requirements change; retain the root's generation measurements. |
-| `.caution/release-keymaker-pcr-policy.json` | Application bundles presented for share release | Add independently verified application Keymaker measurements; retain approved sets needed by existing bundles. |
+| `.caution/keymaker-pcr-policy.json` | Necroproofs for both the key service root bundle and application bundles presented for share release | Add independently verified Keymaker measurements; retain approved sets and generation cutoffs needed by the existing root and application bundles. |
 | Client recryptor PCR policy | The running key service | Refresh after verifying a changed service image or embedded configuration. |
 
-For a new service, if the same verified Keymaker image generates both the root
-bundle and application bundles, initialize the release policy from the root's
-generation policy:
+The key service packages one generation policy. Both its bootstrap Locksmith
+receiver and its share-release authorizer use the same list of approved Keymaker
+PCR sets. Start with the verified policy saved alongside the root bundle and add
+approved sets needed by application bundles. Replacing this list with only the
+newest measurements can prevent the existing root from being recovered.
 
-```sh
-cp .caution/keymaker-pcr-policy.json .caution/release-keymaker-pcr-policy.json
-```
-
-If application bundles use other Keymaker images, include their independently
-verified measurement sets instead. For an existing service, preserve approved
-sets still needed by existing application bundles rather than overwrite them.
-
-The two Keymaker policies are packaged separately. Replacing the bootstrap
-policy with an application policy can prevent the service from starting.
-A missing application measurement set causes release-begin verification to fail.
+There is no `current` flag: the service verifies historical necroproofs and does
+not choose an image for new generation. Any matching set is accepted if the proof's
+authenticated generation time precedes that set's optional
+`expires_at_unix_seconds` cutoff. A set without a cutoff remains accepted without
+a generation-time limit; several such sets are allowed. Retiring a generation
+image does not invalidate earlier proofs while their approved set and cutoff remain.
 
 `.caution/release-config.json` contains the registered Platform RP ID/origin and
-paths to the packaged release policy and CA:
+paths to the shared generation policy and CA:
 
 ```json
 {
   "rp_id": "dashboard.example.com",
   "origin": "https://dashboard.example.com",
-  "keymaker_policy_path": "/etc/caution/release-keymaker-pcr-policy.json",
+  "keymaker_policy_path": "/etc/caution/keymaker-pcr-policy.json",
   "ca_cert_path": "/etc/caution/caution-ca.asc"
 }
 ```
 
 There is no Keymaker URL in this configuration. Release verifies the signed
 Keymaker evidence embedded in each bundle without contacting Keymaker.
+
+### Migrating a deployment with two policy files
+
+Consolidate the approved sets from the existing `keymaker-pcr-policy.json` and
+`release-keymaker-pcr-policy.json` into `.caution/keymaker-pcr-policy.json`.
+Preserve the generation measurements needed by the root and supported application
+bundles. Review any conflicting cutoffs explicitly; an unbounded duplicate would
+override a more restrictive cutoff for the same measurements.
+
+Set `keymaker_policy_path` in the deployment's `.caution/release-config.json` to
+`/etc/caution/keymaker-pcr-policy.json`. The updated image recipe packages only
+this policy. After the root and application proof checks below pass, remove the
+obsolete deployment input `.caution/release-keymaker-pcr-policy.json` and commit
+the consolidated policy and updated configuration. Preserve the existing root
+bundle, CA and encrypted token. Rebasing the code does not rewrite these existing
+deployment inputs automatically; no deployment-specific runtime code is required.
+
+## Keymaker upgrades and release trust
+
+After rebuilding Keymaker, compare its independently verified measurements with
+the key service's generation policy. Changes to Locksmith code, dependencies or image
+configuration can change Keymaker PCRs. Update the policy whenever an approved
+generation image has measurements that are not already accepted. Updating only
+the CLI or an application's Locksmith receiver does not itself require this change.
+
+The key service checks root and application bundle necroproofs against
+`.caution/keymaker-pcr-policy.json`, packaged in the example image as
+`/etc/caution/keymaker-pcr-policy.json`. Its consumers load this policy at startup;
+there is no live policy-update endpoint. If the generation measurements are
+missing, `/v1/releases/begin` rejects the bundle before passkey approval.
+
+1. Independently reproduce and verify the intended Keymaker image. Add its approved
+   PCR0/1/2 as another `sets` entry in the key-service deployment checkout's generation
+   policy. Retain approved historical sets and their existing generation cutoffs:
+   each necroproof is checked at its authenticated generation time.
+2. Preserve the existing root bundle, its public CA and encrypted issuance token.
+   Verify the root and a bundle from each supported application generation with
+   `caution secret inspect --bundle PATH --keymaker-pcr-policy .caution/keymaker-pcr-policy.json`.
+3. Commit the generation policy, rebuild and redeploy the key service, independently
+   verify its changed measurements, and unlock the existing root using its
+   external-PGP holders. No new root bundle is needed.
+4. Update Platform's certificate-service policy, the gateway's release-service
+   policy and holder clients' key-service trust to the verified new service
+   measurements. Check passkey release against a bundle from the new generation.
+
+Platform's Keymaker admission policy must also accept the new generation before
+bundle creation/upload. Running `caution verify --service keymaker` or updating
+that API policy does not rewrite the generation policy inside a running key service.
 
 ## Check and deploy
 
@@ -267,11 +311,9 @@ From the deployment checkout, check packaging:
 python3 examples/certificate-service/check-inputs.py
 ```
 
-**Current checker limitation:** it requires a threshold of at least two, although
-the CLI/runtime support 1-of-N. For an intentional 1-of-N root, it stops before
-checking the remaining inputs. Review the example's [required-input list](../examples/certificate-service/README.md#prepare-the-existing-deployment-checkout)
-manually and still verify the root proof below. Do not regenerate a valid root
-merely to satisfy this checker.
+The checker accepts valid 1-of-N and higher-threshold external-PGP roots. It checks
+the shared policy's presence and measurement shape, the configured runtime path,
+and the other required package inputs. It does not authenticate a necroproof.
 
 Inspect the root bundle to verify its proof and review the bundle identity,
 generation time, threshold and holder certificates. Packaging checks do not
@@ -288,7 +330,7 @@ application bundle, defer this check until one has been generated:
 
 ```sh
 caution secret inspect --bundle /path/to/application/.caution/quorum-bundle.json \
-  --keymaker-pcr-policy .caution/release-keymaker-pcr-policy.json
+  --keymaker-pcr-policy .caution/keymaker-pcr-policy.json
 ```
 
 Commit the public/encrypted image inputs before deploying; the builder receives
@@ -298,7 +340,6 @@ committed files, not working-tree edits:
 git add caution.hcl \
   .caution/quorum-bundle.json .caution/keymaker-pcr-policy.json \
   .caution/caution-ca.asc .caution/release-config.json \
-  .caution/release-keymaker-pcr-policy.json \
   .caution/secrets/PUBLIC_CERTIFICATE_SERVICE_TOKEN.asc
 git diff --cached --stat
 git commit -S -m "Configure key-service bootstrap inputs"

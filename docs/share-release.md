@@ -14,6 +14,11 @@ Set `CAUTION_RELEASE_CONFIG` to an immutable image file containing `rp_id`, `ori
 Origin must be HTTPS and match the registered Platform origin. Bundle credential
 snapshots must contain the passkey used to approve. CA and Keymaker policy files
 are independently verified public trust inputs, not discovered from a service.
+The deployment example uses `/etc/caution/keymaker-pcr-policy.json` for both root
+recovery and application release. Its `sets` list retains approved historical
+measurements and optional generation-time cutoffs; a `current` marker is not needed
+to verify necroproofs. Preserve the sets needed by the existing root when updating
+application-generation trust. See [policy migration](key-service-deployment.md#migrating-a-deployment-with-two-policy-files).
 
 Begin authenticates the proofed bundle at generation time and its selected
 certificate's CA-certified organization/bundle/index. Prepare checks fresh

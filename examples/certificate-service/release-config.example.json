@@ -1,6 +1,6 @@
 {
   "rp_id": "YOUR_PLATFORM_RP_ID",
   "origin": "https://YOUR_PLATFORM_ORIGIN",
-  "keymaker_policy_path": "/etc/caution/release-keymaker-pcr-policy.json",
+  "keymaker_policy_path": "/etc/caution/keymaker-pcr-policy.json",
   "ca_cert_path": "/etc/caution/caution-ca.asc"
 }
