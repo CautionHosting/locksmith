@@ -11,6 +11,11 @@ enclave "default" {
   }
 
   network {
+    http {
+      domain = "keymaker.kobl.one"
+      port = 8080
+    }
+
     ingress {
       cidr_ipv4 = "0.0.0.0/0"
       port = 8080
