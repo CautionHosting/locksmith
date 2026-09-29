@@ -1,0 +1,6 @@
+{
+  "rp_id": "alpha.6etx.xyz",
+  "origin": "https://alpha.6etx.xyz",
+  "keymaker_policy_path": "/etc/caution/keymaker-pcr-policy.json",
+  "ca_cert_path": "/etc/caution/caution-ca.asc"
+}
