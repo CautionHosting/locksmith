@@ -107,6 +107,8 @@ certificate-lifetime rules. A configured CA primary key is a durable trust ancho
 snapshot expiration alone does not retire it, while revocation, algorithm,
 certification-signature and organization/bundle/index checks remain enforced.
 These rules do not discover later revocations or rotate the stored holder keys.
+Deleting or resetting a Platform credential does not revoke its authority in
+existing quorum bundles.
 
 Explicit smartcard holder selection filters encryption fingerprints before PIN
 entry and both metadata/share decryption. An absent selected card fails without

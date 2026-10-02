@@ -9,7 +9,9 @@ mod recovery;
 pub mod client;
 pub mod server;
 
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+
+const MAX_FRAME_BODY: u32 = 1024 * 1024;
 
 // Protocol:
 //
@@ -33,6 +35,12 @@ where
 
 #[derive(Debug, thiserror::Error)]
 enum ReceiveError {
+    #[error("frame body length {length} is outside 32..={MAX_FRAME_BODY} [{location}]")]
+    InvalidFrameLength {
+        length: u32,
+        location: &'static std::panic::Location<'static>,
+    },
+
     #[error("could not receive payload")]
     ReceivePayload {
         #[from]
@@ -47,12 +55,22 @@ enum ReceiveError {
 }
 
 #[tracing::instrument(skip_all, fields(receive_type = std::any::type_name::<Receive>()))]
-async fn receive<Receive>(socket: &mut tokio::net::TcpStream) -> Result<Receive, ReceiveError>
+async fn receive<Receive>(socket: &mut (impl AsyncRead + Unpin)) -> Result<Receive, ReceiveError>
 where
     Receive: serde::de::DeserializeOwned + std::fmt::Debug,
 {
     tracing::debug!("receiving type");
-    let response_bytes = keyfork_frame::asyncext::try_decode_from(socket)
+    let length = socket.read_u32().await.map_err(keyfork_frame::DecodeError::from)?;
+    if !(32..=MAX_FRAME_BODY).contains(&length) {
+        return Err(ReceiveError::InvalidFrameLength {
+            length,
+            location: std::panic::Location::caller(),
+        });
+    }
+    // Validate before the dependency allocates; replay its unchanged wire header.
+    let prefix = length.to_be_bytes();
+    let mut framed = prefix.as_slice().chain(socket);
+    let response_bytes = keyfork_frame::asyncext::try_decode_from(&mut framed)
         .await?;
 
     let response: Receive = serde_json::from_slice(&response_bytes)?;
@@ -82,3 +100,6 @@ where
     send(socket, value).await?;
     receive(socket).await.map_err(Into::into)
 }
+
+#[cfg(test)]
+mod framing_tests;

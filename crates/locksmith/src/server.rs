@@ -18,6 +18,9 @@ use structstruck::strike;
 use tracing::{debug, error};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
+const MAX_RECOVERY_CONNECTIONS: usize = 32;
+const RECOVERY_CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 #[derive(Debug, Clone)]
 struct Payload {
     request: models::SendShardRequest,
@@ -128,6 +131,7 @@ async fn server(
         .await
         .with_contexts((), ErrorKind::BindSocket)?;
     debug!(?address, "bound server");
+    let connections = Arc::new(tokio::sync::Semaphore::new(MAX_RECOVERY_CONNECTIONS));
 
     // If we can't accept clients _twice_, let's kill the server.
     let mut previous_error: Option<std::io::Error> = None;
@@ -154,13 +158,22 @@ async fn server(
             }
         };
 
-        tokio::spawn(handle_client(
+        let Ok(permit) = connections.clone().try_acquire_owned() else {
+            continue; // Drop excess clients immediately; never queue waiting tasks.
+        };
+        let handler = handle_client(
             client,
             keyrings.clone(),
             tx.clone(),
             broadcast_tx.subscribe(),
             RequestStub::new(),
-        ));
+        );
+        tokio::spawn(async move {
+            let _permit = permit;
+            if tokio::time::timeout(RECOVERY_CONNECTION_TIMEOUT, handler).await.is_err() {
+                tracing::debug!("recovery connection timed out");
+            }
+        });
     }
 }
 
@@ -585,3 +598,7 @@ pub async fn receive_shards_at(
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "connection_tests.rs"]
+mod connection_tests;

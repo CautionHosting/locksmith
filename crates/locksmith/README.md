@@ -33,6 +33,18 @@ or prevent an authorized holder from denying recovery.
 Reconstruction does not change the stored bundle, certificate strings, hash or
 proof envelope.
 
+Recovery frame bodies must be between 32 bytes and 1 MiB, including the checksum;
+the length is checked before allocation. Each listener admits at most 32 active
+connections and closes excess connections immediately. Each connection has five
+minutes to finish the entire exchange, including PIN/QR approval and socket I/O.
+The overall wait for the quorum remains unlimited. If disconnected while idle or
+busy, start a fresh submission; if an acknowledgement was lost, check the CLI and
+quorum status first because an already accepted share is not rolled back.
+These limits preserve the wire format and require rebuilding and redeploying the
+Locksmith receiver, then verifying the updated image. Updating the CLI alone does
+not harden existing deployed receivers. They bound resources, not availability
+under a sustained flood.
+
 Run `cargo test -p locksmith --lib --locked` and
 `cargo check -p locksmith --all-targets --locked` from the workspace root.
 The regression tests exercise software-key signing and receiver verification for
