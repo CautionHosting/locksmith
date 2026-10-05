@@ -102,6 +102,7 @@ fn decrypt_selected_shard(
     holder: Option<&str>,
 ) -> Result<(models::SendShardRequest, String), SendShardError> {
     use SendShardErrorKind as Kind;
+    let bundle_hash = bundle.bundle_hash().with_contexts((), Kind::BundleAccess)?;
     let bundle = bundle.recovery();
     if bundle.threshold == 0
         || bundle.threshold > bundle.max
@@ -114,7 +115,7 @@ fn decrypt_selected_shard(
     if let (None, Some(holder)) = (private_key_path, holder) {
         let (shard, threshold, index) = crate::openpgp::selected_card::decrypt(&bundle, holder, prompt)
             .with_contexts((), Kind::DecryptShard)?;
-        let request = models::SendShardRequest { shard, threshold };
+        let request = models::SendShardRequest { shard, threshold, bundle_hash };
         let keyring = signing_keyring(&bundle, &request, Some(index))?;
         return Ok((request, keyring));
     }
@@ -186,11 +187,11 @@ fn decrypt_selected_shard(
             .ok_or_else(|| SendShardError::invalid(Kind::NoMatchingHolderKeys))?;
         let (shard, threshold) = crate::legacy::decrypt_share(bundle, private, index, prompt)
             .with_contexts((), Kind::DecryptShard)?;
-        models::SendShardRequest { shard, threshold }
+        models::SendShardRequest { shard, threshold, bundle_hash }
     } else {
         let messages = OpenPGP.parse_shard_file(bundle.shardfile.as_bytes()).with_contexts((), Kind::ParseShardfile)?;
         let (share, threshold) = OpenPGP.decrypt_one_shard(private_keys, &messages, prompt).with_contexts((), Kind::DecryptShard)?;
-        models::SendShardRequest { shard: Vec::from(&share), threshold }
+        models::SendShardRequest { shard: Vec::from(&share), threshold, bundle_hash }
     };
     let keyring = signing_keyring(&bundle, &request, selected)?;
     if let Some(holder) = holder {
@@ -243,6 +244,13 @@ pub async fn send_selected_shard(
     holder: Option<String>,
 ) -> Result<models::SendSignedEncryptedShardResponse, SendShardError> {
     use SendShardErrorKind as ErrorKind;
+
+    // Get our shard before connecting, so the PIN prompts don't hold a server connection open
+    let temp_ph = std::rc::Rc::new(std::sync::Mutex::new(
+        keyfork_prompt::default_handler().expect("please give us a handler"),
+    ));
+    let (request, keyring) =
+        decrypt_selected_shard(bundle, opt_private_key_path.as_deref(), temp_ph.clone(), holder.as_deref())?;
 
     // Establish a connection with the server
     let mut connection = tokio::net::TcpStream::connect(address)
@@ -302,15 +310,6 @@ pub async fn send_selected_shard(
     hkdf.expand(b"nonce", &mut nonce_data)
         .with_contexts((), ErrorKind::HkdfExpansionInvalid)?;
     let nonce = Nonce::<U12>::from_slice(&nonce_data);
-
-    // Get our shard
-    //
-    let temp_ph = std::rc::Rc::new(std::sync::Mutex::new(
-        keyfork_prompt::default_handler().expect("please give us a handler"),
-    ));
-    let bundle = bundle.recovery();
-    let (request, keyring) =
-        decrypt_selected_shard(&bundle, opt_private_key_path.as_deref(), temp_ph.clone(), holder.as_deref())?;
 
     // Create the encrypted payload
     //

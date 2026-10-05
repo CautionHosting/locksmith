@@ -13,17 +13,18 @@ async fn get_shards() -> Vec<u8> {
         .expect("valid image-baked bundle");
     if legacy { tracing::warn!("Legacy V0 — no Keymaker generation proof; using image-baked recovery metadata"); }
 
-    let reconstituted_secret = locksmith::server::receive_shards_at(
-        "0.0.0.0:49504"
-            .parse()
-            .expect("known address can be parsed"),
-        &bundle,
-        generation_time,
-    )
-    .await
-    .expect("can get shards");
-
-    reconstituted_secret
+    let address = "0.0.0.0:49504"
+        .parse()
+        .expect("known address can be parsed");
+    loop {
+        match locksmith::server::receive_shards_at(address, &bundle, generation_time).await {
+            Ok(reconstituted_secret) => return reconstituted_secret,
+            Err(error) if error.restarts_recovery() => {
+                tracing::error!(%error, "recovered secret did not match the bundle; every holder must resubmit");
+            }
+            Err(error) => panic!("can get shards: {error:?}"),
+        }
+    }
 }
 
 #[tokio::main]

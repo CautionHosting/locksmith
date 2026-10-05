@@ -8,6 +8,8 @@ use tokio::{
 struct Listener {
     address: SocketAddr,
     task: tokio::task::JoinHandle<Result<(), ReceiveShardsError>>,
+    // Dropping this ends the session, as when reconstitution returns.
+    shards: Option<tokio::sync::mpsc::Receiver<Payload>>,
 }
 impl Drop for Listener {
     fn drop(&mut self) {
@@ -19,11 +21,12 @@ async fn start() -> (Listener, TcpStream) {
     let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = reservation.local_addr().unwrap();
     drop(reservation);
-    let (tx, _rx) = tokio::sync::mpsc::channel(255);
+    let (tx, shards) = tokio::sync::mpsc::channel(255);
     let (status, _) = tokio::sync::broadcast::channel(255);
     let listener = Listener {
         address,
         task: tokio::spawn(server(address, Arc::new(vec![]), tx, status)),
+        shards: Some(shards),
     };
     let first = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -77,6 +80,22 @@ async fn connection_capacity_rejects_excess_and_reuses_released_slot() {
 }
 
 #[tokio::test]
+async fn ended_session_releases_unsubmitted_clients() {
+    let (mut listener, first) = start().await;
+    let mut clients = vec![first];
+    for _ in 1..MAX_RECOVERY_CONNECTIONS {
+        clients.push(TcpStream::connect(listener.address).await.unwrap());
+    }
+    assert_open(clients.last_mut().unwrap()).await;
+    // A restarted recovery must not inherit the previous session's connections.
+    listener.task.abort();
+    listener.shards = None;
+    for client in &mut clients {
+        assert_closed(client).await;
+    }
+}
+
+#[tokio::test]
 async fn stalled_header_and_body_expire_without_stopping_listener() {
     let (listener, mut header) = start().await;
     let mut body = TcpStream::connect(listener.address).await.unwrap();
@@ -93,7 +112,7 @@ async fn stalled_header_and_body_expire_without_stopping_listener() {
     assert_closed(&mut excess).await;
 
     tokio::time::pause();
-    tokio::time::advance(RECOVERY_CONNECTION_TIMEOUT - Duration::from_secs(1)).await;
+    tokio::time::advance(FIRST_FRAME_TIMEOUT - Duration::from_secs(1)).await;
     assert!(
         matches!(clients[0].try_read(&mut [0]), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
     );
@@ -113,4 +132,33 @@ async fn stalled_header_and_body_expire_without_stopping_listener() {
     assert_open(replacements.last_mut().unwrap()).await;
     let mut excess = TcpStream::connect(listener.address).await.unwrap();
     assert_closed(&mut excess).await;
+}
+
+#[cfg(feature = "unsafe-e2e")]
+#[tokio::test]
+async fn post_attestation_stall_expires_at_connection_deadline() {
+    if std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() != Ok("1") {
+        return;
+    }
+    let (listener, mut client) = start().await;
+    crate::send(
+        &mut client,
+        models::GeneratePublicKeyRequest {
+            nonce: "ab".repeat(16),
+        },
+    )
+    .await
+    .unwrap();
+    let _: models::GeneratePublicKeyResponse = crate::receive(&mut client).await.unwrap();
+
+    // Past the first frame, a holder may still be signing: only the connection deadline applies.
+    tokio::time::pause();
+    tokio::time::advance(FIRST_FRAME_TIMEOUT + Duration::from_secs(1)).await;
+    assert!(
+        matches!(client.try_read(&mut [0]), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
+    );
+    tokio::time::advance(RECOVERY_CONNECTION_TIMEOUT).await;
+    tokio::time::resume();
+    assert_closed(&mut client).await;
+    assert!(!listener.task.is_finished());
 }

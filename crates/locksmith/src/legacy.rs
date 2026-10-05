@@ -98,6 +98,9 @@ impl RecoverySource for ImportedV0 {
             legacy: true,
         }
     }
+    fn bundle_hash(&self) -> Result<Option<String>, Error> {
+        self.content_hash().map(Some)
+    }
 }
 
 /// Reject unknown format markers instead of trying V1 and falling back on error.

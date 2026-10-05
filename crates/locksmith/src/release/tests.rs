@@ -456,6 +456,7 @@ fn mock_release_with_indices(indices: &[u8], external: bool) {
     assert_eq!(share.threshold, holders.len() as u8);
     assert_eq!(share.shard[0], position as u8 + 1);
     assert_eq!(share.shard.len(), 33);
+    assert_eq!(share.bundle_hash.as_ref(), Some(&begun.data.context.bundle_hash));
     let mut altered = encrypted;
     altered.signed_payload.push(' ');
     assert!(crypto::verify_request(&armor(&private), &altered, SystemTime::now()).is_err());

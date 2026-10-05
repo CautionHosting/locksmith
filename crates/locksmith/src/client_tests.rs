@@ -79,6 +79,8 @@ fn software_selection_follows_bundle_order_and_signs_the_same_holder() {
         let (request, keyring) = decrypt_shard(&bundle, Some(&file.0), prompt()).unwrap();
         assert_eq!(request.shard[0], 1);
         assert_eq!(request.threshold, 2);
+        assert_eq!(request.bundle_hash, bundle.bundle_hash().unwrap());
+        assert!(request.bundle_hash.is_some());
         let signature = crate::openpgp::sign(
             &keyring,
             "payload",
@@ -168,6 +170,7 @@ fn signing_is_scoped_to_the_decrypted_coordinate() {
     let mut request = models::SendShardRequest {
         shard: vec![1; 33],
         threshold: 2,
+        bundle_hash: None,
     };
     request.shard[0] = 2;
     let keyring = signing_keyring(&bundle, &request, None).unwrap();

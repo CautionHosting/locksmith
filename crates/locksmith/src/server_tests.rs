@@ -138,11 +138,21 @@ async fn submit(
     threshold: u8,
     shard: Vec<u8>,
 ) -> models::SendSignedEncryptedShardResponse {
+    let request = models::SendShardRequest { threshold, shard, bundle_hash: None };
+    submit_request(tx, rx, holder, request).await
+}
+
+async fn submit_request(
+    tx: &tokio::sync::mpsc::Sender<Payload>,
+    rx: &mut tokio::sync::broadcast::Receiver<ReconstitutionStatus>,
+    holder: usize,
+    request: models::SendShardRequest,
+) -> models::SendSignedEncryptedShardResponse {
     let request_stub = RequestStub::new();
     tx.send(Payload {
         holder,
         request_stub,
-        request: models::SendShardRequest { threshold, shard },
+        request,
     })
     .await
     .unwrap();
@@ -161,6 +171,7 @@ async fn recovery_counts_only_distinct_valid_contributions() {
         threshold: 3,
         keyrings: Arc::new(vec![HolderKeyring { certificate: String::new(), generation_time: None }; 5]),
         public_key: generated_public_key([7; 32]).fingerprint(),
+        bundle_hash: None,
     };
     let shares: Vec<_> = Sharks(3)
         .dealer(&[7; 32])
@@ -231,8 +242,9 @@ async fn multi_holder_private_file_can_complete_two_of_two_recovery() {
         .unwrap();
         let holder = authenticate_holder(&keyrings, "payload", &signature).unwrap();
         assert_eq!(holder, index);
+        assert!(request.bundle_hash.is_some());
         assert!(
-            matches!(submit(&tx, &mut status_rx, holder, request.threshold, request.shard).await,
+            matches!(submit_request(&tx, &mut status_rx, holder, request).await,
             models::SendSignedEncryptedShardResponse::Accepted { remaining } if remaining == 1 - index as u8)
         );
     }
@@ -245,6 +257,7 @@ async fn incorrect_reconstructed_entropy_is_rejected() {
         threshold: 1,
         keyrings: Arc::new(vec![HolderKeyring { certificate: String::new(), generation_time: None }]),
         public_key: generated_public_key([7; 32]).fingerprint(),
+        bundle_hash: None,
     };
     let shard = Vec::from(&Sharks(1).dealer(&[8; 32]).next().unwrap());
     let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -254,10 +267,64 @@ async fn incorrect_reconstructed_entropy_is_rejected() {
         submit(&tx, &mut status_rx, 0, 1, shard).await,
         models::SendSignedEncryptedShardResponse::Rejected { .. }
     ));
+    let error = task.await.unwrap().unwrap_err();
+    assert!(matches!(error.kind, ReceiveShardsErrorKind::RecoveredKeyMismatch));
+    assert!(error.restarts_recovery());
+}
+
+#[tokio::test]
+async fn shares_bind_to_bundle_and_holder_position() {
+    use models::SendSignedEncryptedShardResponse::{Accepted, Rejected};
+    let recovery = Recovery {
+        threshold: 2,
+        keyrings: Arc::new(vec![HolderKeyring { certificate: String::new(), generation_time: None }; 3]),
+        public_key: generated_public_key([7; 32]).fingerprint(),
+        bundle_hash: Some("aa".into()),
+    };
+    let shares: Vec<_> = Sharks(2)
+        .dealer(&[7; 32])
+        .take(3)
+        .map(|s| Vec::from(&s))
+        .collect();
+    let request = |shard: &Vec<u8>, bundle_hash: Option<&str>| models::SendShardRequest {
+        shard: shard.clone(),
+        threshold: 2,
+        bundle_hash: bundle_hash.map(Into::into),
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    let (status_tx, mut status_rx) = tokio::sync::broadcast::channel(10);
+    let task = tokio::spawn(async move { reconstitute_shards(rx, status_tx, &recovery).await });
+    // Holder 0 was dealt coordinate 1.
     assert!(matches!(
-        task.await.unwrap().unwrap_err().kind,
-        ReceiveShardsErrorKind::RecoveredKeyMismatch
+        submit_request(&tx, &mut status_rx, 0, request(&shares[1], Some("aa"))).await,
+        Rejected { reason } if reason.contains("bundle position")
     ));
+    // A share from another bundle must not consume the holder's contribution.
+    assert!(matches!(
+        submit_request(&tx, &mut status_rx, 0, request(&shares[0], Some("bb"))).await,
+        Rejected { reason } if reason.contains("different bundle")
+    ));
+    assert!(matches!(
+        submit_request(&tx, &mut status_rx, 0, request(&shares[0], Some("aa"))).await,
+        Accepted { remaining: 1 }
+    ));
+    // Older clients omit the hash and remain accepted.
+    assert!(matches!(
+        submit_request(&tx, &mut status_rx, 1, request(&shares[1], None)).await,
+        Accepted { remaining: 0 }
+    ));
+    assert_eq!(task.await.unwrap().unwrap(), [7; 32]);
+}
+
+#[test]
+fn recovery_binds_the_bundle_content_hash() {
+    let bundle = bundle(vec![entry(&holder())], 1);
+    let expected = crate::bundle::LoadedBundle::from(bundle.clone())
+        .content_hash()
+        .unwrap();
+    assert_eq!(Recovery::new(&bundle).unwrap().bundle_hash.as_ref(), Some(&expected));
+    let GenerateQuorumBundle::V1(data) = &bundle;
+    assert_eq!(data.bundle_hash().unwrap(), Some(expected));
 }
 
 #[test]
@@ -331,10 +398,11 @@ async fn legacy_expired_nonparticipant_does_not_block_import_or_restart_recovery
         let holder = authenticate_holder(&recovery.keyrings, "current contribution", &sign(&alice, "current contribution")).unwrap();
         assert_eq!(holder, 0);
         let (request, _) = decrypt_shard(&loaded, Some(&legacy::fixture("alice.private.asc")), prompt()).unwrap();
+        assert_eq!(request.bundle_hash, Some(loaded.content_hash().unwrap()));
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let (status_tx, mut status_rx) = tokio::sync::broadcast::channel(1);
         let task = tokio::spawn(async move { reconstitute_shards(rx, status_tx, &recovery).await });
-        assert!(matches!(submit(&tx, &mut status_rx, holder, request.threshold, request.shard).await,
+        assert!(matches!(submit_request(&tx, &mut status_rx, holder, request).await,
             models::SendSignedEncryptedShardResponse::Accepted { remaining: 0 }));
         assert_eq!(task.await.unwrap().unwrap(), [7; 32]);
     }

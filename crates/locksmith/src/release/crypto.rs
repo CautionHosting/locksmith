@@ -158,6 +158,7 @@ pub fn recrypt(
     let request = SendShardRequest {
         shard,
         threshold: bundle.threshold,
+        bundle_hash: Some(context.bundle_hash.clone()),
     };
     let secret = EphemeralSecret::random();
     let public_key = PublicKey::from(&secret).to_bytes();

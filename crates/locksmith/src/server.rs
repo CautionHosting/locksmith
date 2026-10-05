@@ -20,6 +20,8 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 
 const MAX_RECOVERY_CONNECTIONS: usize = 32;
 const RECOVERY_CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+// Every client sends its nonce as soon as it connects; an idle peer must not keep a slot.
+const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 struct Payload {
@@ -46,6 +48,7 @@ strike! {
             InvalidShare,
             RecoverShards,
             ReceiveRequest,
+            FirstFrameTimeout,
             SendResponse,
             GenerateAttestation,
             FailedSendRejection,
@@ -188,10 +191,52 @@ async fn handle_client(
 ) -> Result<(), ReceiveShardsError> {
     use ReceiveShardsErrorKind as ErrorKind;
 
-    let secret = EphemeralSecret::random();
-    let request: models::GeneratePublicKeyRequest = crate::receive(&mut client)
+    // Reconstitution ending (recovered, or restarting after a mismatch) closes the shard channel.
+    // An unsubmitted client can no longer count, so release its connection now; submitted
+    // clients still receive their final status.
+    let (request, holder) = tokio::select! {
+        submission = receive_submission(&mut client, &keyrings) => submission?,
+        () = tx.closed() => {
+            debug!("reconstitution ended before the client submitted");
+            return Ok(());
+        }
+    };
+
+    tx.send(Payload {
+        request,
+        holder,
+        request_stub,
+    })
+    .await
+    .with_contexts((), ErrorKind::AddShard)?;
+
+    let response = loop {
+        let status = broadcast_rx
+            .recv()
+            .await
+            .with_contexts((), ErrorKind::SyncShardReconstitutionStatus)?;
+        if status.request_stub == request_stub {
+            break status.response;
+        }
+    };
+    crate::send(&mut client, response)
         .await
-        .with_contexts((), ErrorKind::ReceiveRequest)?;
+        .with_contexts((), ErrorKind::SendResponse)?;
+    Ok(())
+}
+
+async fn receive_submission(
+    client: &mut tokio::net::TcpStream,
+    keyrings: &[HolderKeyring],
+) -> Result<(models::SendShardRequest, usize), ReceiveShardsError> {
+    use ReceiveShardsErrorKind as ErrorKind;
+
+    let secret = EphemeralSecret::random();
+    let request: models::GeneratePublicKeyRequest =
+        tokio::time::timeout(FIRST_FRAME_TIMEOUT, crate::receive(client))
+            .await
+            .with_contexts((), ErrorKind::FirstFrameTimeout)?
+            .with_contexts((), ErrorKind::ReceiveRequest)?;
 
     debug!("generating attestation");
     let attestation = crate::release::generate_live(
@@ -205,18 +250,18 @@ async fn handle_client(
         })?;
 
     let request: models::SendSignedEncryptedShardRequest = crate::send_and_receive(
-        &mut client,
+        client,
         models::GeneratePublicKeyResponse { attestation },
     )
     .await
     .with_contexts((), ErrorKind::ReceiveRequest)?;
 
     debug!("verifying signed request from user");
-    let holder = match authenticate_holder(&keyrings, &request.signed_payload, &request.signature) {
+    let holder = match authenticate_holder(keyrings, &request.signed_payload, &request.signature) {
         Ok(holder) => holder,
         Err(error) => {
             crate::send(
-                &mut client,
+                client,
                 models::SendSignedEncryptedShardResponse::Rejected {
                     reason: error.signature_rejection_reason().into(),
                 },
@@ -263,7 +308,7 @@ async fn handle_client(
         Ok(request) => request,
         Err(source) => {
             crate::send(
-                &mut client,
+                client,
                 models::SendSignedEncryptedShardResponse::Rejected {
                     reason: "Malformed share request".into(),
                 },
@@ -277,28 +322,7 @@ async fn handle_client(
             });
         }
     };
-
-    tx.send(Payload {
-        request: decoded_payload,
-        holder,
-        request_stub,
-    })
-    .await
-    .with_contexts((), ErrorKind::AddShard)?;
-
-    let response = loop {
-        let status = broadcast_rx
-            .recv()
-            .await
-            .with_contexts((), ErrorKind::SyncShardReconstitutionStatus)?;
-        if status.request_stub == request_stub {
-            break status.response;
-        }
-    };
-    crate::send(&mut client, response)
-        .await
-        .with_contexts((), ErrorKind::SendResponse)?;
-    Ok(())
+    Ok((decoded_payload, holder))
 }
 
 // Authenticate against each proof-bound holder entry, never against a claimed issuer ID.
@@ -339,6 +363,15 @@ fn authenticate_holder(
 }
 
 impl ReceiveShardsError {
+    /// The share set failed as a whole and cannot be attributed to one holder, so recovery
+    /// can only start over with fresh submissions.
+    pub fn restarts_recovery(&self) -> bool {
+        matches!(
+            self.kind,
+            ReceiveShardsErrorKind::RecoverShards | ReceiveShardsErrorKind::RecoveredKeyMismatch
+        )
+    }
+
     fn signature_log_cause(&self) -> &'static str {
         use crate::openpgp::VerifyErrorKind;
         let verification = self
@@ -405,6 +438,7 @@ struct Recovery {
     threshold: u8,
     keyrings: Arc<Vec<HolderKeyring>>,
     public_key: Fingerprint,
+    bundle_hash: Option<String>,
 }
 
 impl Recovery {
@@ -413,6 +447,9 @@ impl Recovery {
         Self::new_at(bundle, None)
     }
     fn new_at(bundle: &impl RecoverySource, at: Option<SystemTime>) -> Result<Self, ReceiveShardsError> {
+        let bundle_hash = bundle
+            .bundle_hash()
+            .with_contexts((), ReceiveShardsErrorKind::BundleAccess)?;
         let bundle = bundle.recovery();
         if bundle.threshold == 0
             || bundle.threshold > bundle.max
@@ -444,6 +481,7 @@ impl Recovery {
             threshold: bundle.threshold,
             keyrings: Arc::new(keyrings),
             public_key,
+            bundle_hash,
         })
     }
 }
@@ -487,7 +525,6 @@ async fn reconstitute_shards(
     use models::SendSignedEncryptedShardResponse::{Accepted, Rejected};
     let mut shares = vec![];
     let mut holders = HashSet::new();
-    let mut coordinates = HashSet::new();
     loop {
         let Payload {
             request,
@@ -497,19 +534,28 @@ async fn reconstitute_shards(
             .recv()
             .await
             .ok_or_else(|| recovery_error(ReceiveShardsErrorKind::NoMoreShards))?;
-        let reason = if request.threshold != recovery.threshold {
+        let reason = if recovery.bundle_hash.is_some()
+            && request.bundle_hash.is_some()
+            && request.bundle_hash != recovery.bundle_hash
+        {
+            Some("Share was dealt from a different bundle")
+        } else if request.threshold != recovery.threshold {
             Some("Threshold does not match the verified bundle")
         } else if holder >= recovery.keyrings.len() {
             Some("Unknown holder")
         } else if request.shard.len() != 33 || request.shard[0] == 0 {
             Some("Malformed share: expected a nonzero coordinate and 32 bytes")
+        } else if usize::from(request.shard[0]) != holder + 1 {
+            // Keymaker deals coordinates 1..=max in keyring order.
+            Some("Share coordinate does not match the holder's bundle position")
         } else if holders.contains(&holder) {
             Some("Holder already contributed a share")
-        } else if coordinates.contains(&request.shard[0]) {
-            Some("Share coordinate already contributed")
         } else {
             None
         };
+        if reason.is_none() && recovery.bundle_hash.is_some() && request.bundle_hash.is_none() {
+            tracing::warn!(holder, "accepting share without a bundle hash from an older client");
+        }
         if let Some(reason) = reason {
             broadcast_tx
                 .send(ReconstitutionStatus {
@@ -524,7 +570,6 @@ async fn reconstitute_shards(
         let share = Share::try_from(request.shard.as_slice())
             .map_err(|_| recovery_error(ReceiveShardsErrorKind::InvalidShare))?;
         holders.insert(holder);
-        coordinates.insert(request.shard[0]);
         shares.push(share);
         let remaining =
             recovery.threshold - u8::try_from(shares.len()).expect("bounded by threshold");

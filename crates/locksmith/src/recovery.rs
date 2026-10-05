@@ -19,6 +19,10 @@ pub struct RecoveryView<'a> {
 }
 pub trait RecoverySource {
     fn recovery(&self) -> RecoveryView<'_>;
+    /// Content hash identifying the exact bundle; a borrowed view cannot compute one.
+    fn bundle_hash(&self) -> Result<Option<String>, Error> {
+        Ok(None)
+    }
 }
 impl RecoverySource for RecoveryView<'_> {
     fn recovery(&self) -> RecoveryView<'_> {
@@ -37,11 +41,19 @@ impl RecoverySource for v1::GenerateQuorumResponse {
             legacy: false,
         }
     }
+    fn bundle_hash(&self) -> Result<Option<String>, Error> {
+        GenerateQuorumBundle::V1(self.clone()).bundle_hash()
+    }
 }
 impl RecoverySource for GenerateQuorumBundle {
     fn recovery(&self) -> RecoveryView<'_> {
         let Self::V1(data) = self;
         data.recovery()
+    }
+    fn bundle_hash(&self) -> Result<Option<String>, Error> {
+        Ok(Some(smex::encode_to_string(
+            deterministic_bundle_hash(self).with_contexts((), "hash V1 bundle")?,
+        )))
     }
 }
 #[derive(Clone, Debug)]
@@ -55,6 +67,9 @@ impl RecoverySource for LoadedBundle {
             Self::V1(v) => v.recovery(),
             Self::ImportedV0(v) => v.recovery(),
         }
+    }
+    fn bundle_hash(&self) -> Result<Option<String>, Error> {
+        self.content_hash().map(Some)
     }
 }
 impl LoadedBundle {
