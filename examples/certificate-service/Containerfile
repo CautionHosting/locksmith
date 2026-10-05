@@ -6,11 +6,19 @@ COPY --from=stagex/core-gmp@sha256:b69f72317a6a674e2b88c074bce0e7d11fc7b9df2f358
 COPY --from=stagex/user-pcsc-lite@sha256:baf390270d5a5e9a2daa3a5a99f346557f2111d801cd8f35050e36360ab3a7f8 . /
 COPY . .
 ENV RUST_BACKTRACE=1
+# Cargo.lock pins bootproof from Codeberg. If Codeberg fails (e.g. 429), fetch the
+# same rev from the GitHub mirror; insteadOf only rewrites transport, so Cargo.lock
+# and the build output are unchanged.
 RUN <<-EOF
 	ARCH="$(uname -m)"
 	cargo fetch \
 		--locked \
-		--target "${ARCH}-unknown-linux-musl"
+		--target "${ARCH}-unknown-linux-musl" || {
+		git config --global url.https://github.com/CautionHosting/.insteadOf https://codeberg.org/caution/
+		cargo fetch \
+			--locked \
+			--target "${ARCH}-unknown-linux-musl"
+	}
 EOF
 RUN --network=none <<-EOF
 	ARCH="$(uname -m)"
