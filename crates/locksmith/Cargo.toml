@@ -49,8 +49,8 @@ keymaker-models = { version = "0.1.0", path = "../keymaker-models" }
 
 rand = "0.8"
 smex = "0.2.0"
-bootproof = { git = "https://codeberg.org/caution/bootproof.git", rev = "821b5c63e80f082f6d67ba3695c11416933489ec", version = "0.1.0" }
-bootproof-sdk = { git = "https://codeberg.org/caution/bootproof.git", rev = "821b5c63e80f082f6d67ba3695c11416933489ec", version = "0.1.0" }
+bootproof = { git = "https://codeberg.org/caution/bootproof.git", rev = "2590edb0f23cae6589bc73cc8324673023ac1deb", version = "0.1.0" }
+bootproof-sdk = { git = "https://codeberg.org/caution/bootproof.git", rev = "2590edb0f23cae6589bc73cc8324673023ac1deb", version = "0.1.0" }
 x25519-dalek = { version = "2.0.1", features = ["getrandom"] }
 hkdf = "0.12.4"
 sha2 = "0.10.0"

@@ -77,9 +77,10 @@ does not prevent a later valid set from succeeding. No proof, credential or
 bundle contents are included in these diagnostics.
 
 Certificate validity is checked by Bootproof at the signed attestation timestamp,
-without wall-clock substitution or a clock-skew adjustment. The deterministic
-nonce and canonical bundle hash must still match. PCR-policy expiry is a cutoff
-on the authenticated generation time, not the time the saved bundle is loaded:
+without wall-clock substitution or a clock-skew adjustment. Bootproof also checks
+the deterministic nonce and expected canonical bundle hash before returning the
+payload; Locksmith preserves its bundle-hash mismatch diagnostic. PCR-policy
+expiry is a cutoff on the authenticated generation time, not the time the saved bundle is loaded:
 a proof generated before the cutoff can remain valid after certificate expiry.
 This follows [the timestamp policy in #7](https://codeberg.org/caution/locksmith/issues/7#issuecomment-19223141).
 

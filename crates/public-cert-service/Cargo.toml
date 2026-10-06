@@ -9,7 +9,7 @@ publish.workspace = true
 locksmith = { path = "../locksmith" }
 dterror = "0.1.0"
 anyhow = "1.0.102"
-bootproof = { git = "https://codeberg.org/caution/bootproof.git", rev = "821b5c63e80f082f6d67ba3695c11416933489ec", version = "0.1.0" }
+bootproof = { git = "https://codeberg.org/caution/bootproof.git", rev = "2590edb0f23cae6589bc73cc8324673023ac1deb", version = "0.1.0" }
 axum = { version = "0.8.8", features = ["macros"] }
 hex = "0.4.3"
 keyfork-derive-openpgp = { version = "0.2.1", registry = "distrust", default-features = false }

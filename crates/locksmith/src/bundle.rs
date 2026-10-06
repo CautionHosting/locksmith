@@ -129,8 +129,13 @@ fn verify_necroproof_with_pcrs(
     let attestation = Nitro::new(necroproof, pcrs.clone())
         .map_err(|source| VerifyNecroproofError::InvalidPcrs { source })?;
     let document = attestation
-        .verify_at_attestation_time(Some(&nonce))
-        .map_err(|source| VerifyNecroproofError::RejectedByBootproof { source })?;
+        .verify_at_attestation_time(expected_user_data, Some(nonce))
+        .map_err(|source| match source {
+            bootproof_sdk::format::Error::InvalidAAD(ref field) if field == "user_data" => {
+                VerifyNecroproofError::UserDataMismatch
+            }
+            source => VerifyNecroproofError::RejectedByBootproof { source },
+        })?;
     let attestation_timestamp = get_timestamp(&document)?;
     let user_data = get_user_data(document)?;
     if user_data != expected_user_data {

@@ -1,6 +1,8 @@
 use super::*;
 
 const PROOF: &[u8] = include_bytes!("../tests/data/aws-test.cbor");
+// Expected bytes in the fixed AWS fixture, independent of the verification result.
+const USER_DATA: &[u8] = br#"{"verifying_key":[225,86,150,101,164,98,132,0,37,20,133,208,125,175,28,111,85,63,49,250,95,183,71,116,48,243,120,111,101,71,51,47]}"#;
 
 fn fixture() -> (KeymakerPcrSet, Vec<u8>, Vec<u8>, SystemTime) {
     let pcrs = HashMap::from([
@@ -13,7 +15,7 @@ fn fixture() -> (KeymakerPcrSet, Vec<u8>, Vec<u8>, SystemTime) {
             .unwrap();
     let document = Nitro::new(PROOF, pcrs.clone())
         .unwrap()
-        .verify_at_attestation_time(Some(&nonce))
+        .verify_at_attestation_time(USER_DATA, Some(&nonce))
         .unwrap();
     let at = get_timestamp(&document).unwrap();
     let user_data = get_user_data(document).unwrap();
