@@ -2,6 +2,14 @@ use dterror::*;
 use std::panic::Location;
 use structstruck::strike;
 
+#[cfg(feature = "rpgpie")]
+pub(crate) mod selected_card;
+#[cfg(feature = "rpgpie")]
+mod card_prompt;
+mod keyring;
+pub(crate) mod legacy_decrypt;
+pub(crate) use keyring::reconstruct_keyring;
+
 #[derive(Debug, thiserror::Error)]
 #[error("Invalid PIN length: provided {provided_length} < expected 6")]
 pub struct PinLengthError {
@@ -60,7 +68,7 @@ strike! {
     #[error("could not verify message ({kind:?}) [{location}]")]
     pub struct VerifyError {
         pub kind: #[non_exhaustive] pub enum VerifyErrorKind {
-            IncompatibleDrift,
+            SignatureFromFuture,
             LoadCertificates,
             InvalidSignatureCount,
             LoadSignatures,

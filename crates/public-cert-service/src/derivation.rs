@@ -1,5 +1,5 @@
 use bootproof::format::{Format as _, nitro::Nitro};
-use keyfork_derive_openpgp::{XPrvKey, openpgp};
+use keyfork_derive_openpgp::openpgp;
 use keyfork_derive_path_data::paths;
 use keyfork_derive_util::{DerivationIndex, DerivationPath};
 use openpgp::{
@@ -9,6 +9,7 @@ use openpgp::{
 };
 use public_certificate_models::{Proofed, PublicCertificateBundle, PublicCertificateResponse, v1};
 use sha2::{Digest as _, Sha256};
+use std::time::Instant;
 
 /// ASCII namespace component for Caution Keymaker-derived OpenPGP certificates.
 pub const KEYMAKER_NAMESPACE: u32 = u32::from_be_bytes(*b"kmkr");
@@ -117,6 +118,8 @@ pub enum DeterministicBundleHashError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DerivePublicCertificateError {
+    #[error("key service root key unavailable")]
+    Unavailable(#[source] crate::service::Error),
     #[error("failed to connect to keyforkd")]
     ConnectKeyforkd(#[source] keyforkd_client::Error),
 
@@ -237,23 +240,35 @@ pub fn derive_public_certificate(
     request: v1::PublicCertificateRequest,
     bundle_id: [u8; 16],
 ) -> Result<PublicCertificateResponse, DerivePublicCertificateError> {
-    let mut client = keyforkd_client::Client::discover_socket()
-        .map_err(DerivePublicCertificateError::ConnectKeyforkd)?;
-    let ca_xprv = client
-        .request_xprv::<XPrvKey>(&default_openpgp_ca_path())
-        .map_err(DerivePublicCertificateError::RequestDefaultCaKey)?;
+    derive_public_certificate_until(
+        request,
+        bundle_id,
+        None,
+        Instant::now() + crate::service::REQUEST_BUDGET,
+    )
+}
+
+pub(crate) fn derive_public_certificate_until(
+    request: v1::PublicCertificateRequest,
+    bundle_id: [u8; 16],
+    expected_ca: Option<&Cert>,
+    deadline: Instant,
+) -> Result<PublicCertificateResponse, DerivePublicCertificateError> {
+    let ca_cert =
+        crate::service::root_ca(deadline).map_err(DerivePublicCertificateError::Unavailable)?;
+    if expected_ca.is_some_and(|expected| expected.fingerprint() != ca_cert.fingerprint()) {
+        return Err(DerivePublicCertificateError::Unavailable(
+            crate::service::Error::unavailable("configured CA does not match key service root key"),
+        ));
+    }
     let key_flags = public_certificate_key_flags();
-    let ca_userid = UserID::from("Caution default OpenPGP CA");
-    let ca_cert = keyfork_derive_openpgp::derive(&ca_xprv, &key_flags, &ca_userid)
-        .map_err(DerivePublicCertificateError::DeriveDefaultCaCertificate)?;
 
     let mut certificates = Vec::with_capacity(usize::from(request.certificate_count.get()));
 
     for index in 0..request.certificate_count.get() {
         let path = certificate_path(request.organization_id, bundle_id, index);
-        let derived_xprv = client
-            .request_xprv::<XPrvKey>(&path)
-            .map_err(DerivePublicCertificateError::RequestDerivedKey)?;
+        let derived_xprv = crate::service::derive_key(&path, deadline)
+            .map_err(DerivePublicCertificateError::Unavailable)?;
         let userid = public_certificate_userid(index);
         let cert = keyfork_derive_openpgp::derive(&derived_xprv, &key_flags, &userid)
             .map_err(DerivePublicCertificateError::DeriveOpenPgpCertificate)?;
@@ -278,16 +293,65 @@ pub fn derive_public_certificate(
     });
     let bundle_hash =
         deterministic_bundle_hash(&data).map_err(DerivePublicCertificateError::HashBundle)?;
-    let necroproof = Nitro
-        .generate(Some(&bundle_hash), None)
-        .map_err(DerivePublicCertificateError::GenerateNecroproof)?;
+    crate::service::remaining(deadline).map_err(DerivePublicCertificateError::Unavailable)?;
+    let necroproof = generate_necroproof(&bundle_hash)?;
+    crate::service::remaining(deadline).map_err(DerivePublicCertificateError::Unavailable)?;
 
     Ok(Proofed { data, necroproof })
+}
+
+fn generate_necroproof(bundle_hash: &[u8]) -> Result<Vec<u8>, DerivePublicCertificateError> {
+    #[cfg(feature = "unsafe-e2e")]
+    if std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1") {
+        tracing::warn!("UNSAFE E2E: returning a fake public-certificate proof");
+        return Ok(bundle_hash.to_vec());
+    }
+    Nitro
+        .generate(Some(bundle_hash), None)
+        .map_err(DerivePublicCertificateError::GenerateNecroproof)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsafe_proof_requires_feature_and_environment() {
+        const CHILD: &str = "PUBLIC_CERT_HOOK_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let enabled = cfg!(feature = "unsafe-e2e")
+                && std::env::var("CAUTION_UNSAFE_KEY_SERVICE_E2E").as_deref() == Ok("1");
+            let proof = generate_necroproof(&[3; 32]);
+            assert_eq!(proof.as_ref().is_ok_and(|proof| proof == &[3; 32]), enabled);
+            return;
+        }
+        for flag in [None, Some(""), Some("0"), Some("1")] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "derivation::tests::unsafe_proof_requires_feature_and_environment",
+                ])
+                .env(CHILD, "1")
+                .env_remove("CAUTION_UNSAFE_KEY_SERVICE_E2E");
+            if let Some(flag) = flag {
+                child.env("CAUTION_UNSAFE_KEY_SERVICE_E2E", flag);
+            }
+            let output = child.output().unwrap();
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("test result: ok. 1 passed; 0 failed;"),
+                "child must execute exactly one test: {:?}",
+                output
+            );
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     const ORG_ID: [u8; 16] = [
         0x00, 0x11, 0x22, 0x33, 0x84, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
@@ -340,6 +404,53 @@ mod tests {
             public_certificate_userid(3).value(),
             b"Caution public certificate index=3"
         );
+    }
+
+    #[test]
+    fn v1_contract_fixture_preserves_exact_certificate_encoding() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/v1-contract.json"
+        )))
+        .unwrap();
+        assert_eq!(fixture["fixture_version"], 1);
+        let expected = &fixture["public_certificates"];
+        let data: PublicCertificateBundle =
+            serde_json::from_value(expected["data"].clone()).unwrap();
+        assert_eq!(
+            hex::encode(serde_cbor::to_vec(&data).unwrap()),
+            expected["cbor_hex"]
+        );
+        assert_eq!(
+            hex::encode(deterministic_bundle_hash(&data).unwrap()),
+            expected["sha256"]
+        );
+        assert!(expected["proof_nonce"].is_null());
+        assert!(
+            serde_json::from_value::<PublicCertificateBundle>(fixture["quorum"]["data"].clone())
+                .is_err()
+        );
+        assert_eq!(
+            public_certificate_key_flags(),
+            [
+                KeyFlags::empty().set_certification(),
+                KeyFlags::empty().set_signing(),
+                KeyFlags::empty()
+                    .set_transport_encryption()
+                    .set_storage_encryption(),
+                KeyFlags::empty().set_authentication(),
+            ]
+        );
+        let original_hash = deterministic_bundle_hash(&data).unwrap();
+        for changed in ["organization_id", "bundle_id", "certificates"] {
+            let mut value = expected["data"].clone();
+            match changed {
+                "certificates" => value[changed][0] = "changed certificate".into(),
+                _ => value[changed][0] = 42.into(),
+            }
+            let changed: PublicCertificateBundle = serde_json::from_value(value).unwrap();
+            assert_ne!(deterministic_bundle_hash(&changed).unwrap(), original_hash);
+        }
     }
 
     #[test]

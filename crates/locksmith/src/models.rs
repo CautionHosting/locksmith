@@ -32,6 +32,10 @@ pub struct SendEncryptedShardRequest {
 pub struct SendShardRequest {
     pub shard: Vec<u8>,
     pub threshold: u8,
+    // Hex content hash of the bundle the share was dealt from. Optional while older clients,
+    // which omit it, remain supported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

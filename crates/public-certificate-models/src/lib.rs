@@ -71,8 +71,8 @@ pub mod v1 {
         pub bundle_id: [u8; 16],
 
         /// ASCII-armored public OpenPGP certificates. Each certificate contains its immutable
-        /// certificate index as a self-notation and an embedded Caution team CA UID
-        /// certification signature.
+        /// certificate index in its canonical UID. The embedded Caution CA certification
+        /// signs that UID and critical, hashed organization/bundle UUID notations.
         pub certificates: Vec<String>,
     }
 }

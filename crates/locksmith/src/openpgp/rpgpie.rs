@@ -34,10 +34,23 @@ fn try_open_card(
     Ok((card, fpr))
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("no hash algorithms were valid on certificate {fpr}")]
-pub struct NoHashAlgo {
-    fpr: Fingerprint,
+/// Hash used for signing when a certificate declares no preferred-hash subpacket
+/// (or none we accept). SHA-512 is rpgpie's top preference and is supported by
+/// the smartcards and key types we use.
+const DEFAULT_HASH_ALGORITHM: HashAlgorithm = HashAlgorithm::Sha512;
+
+/// Choose the signing hash for a certificate: its most-preferred hash that we
+/// also accept, falling back to [`DEFAULT_HASH_ALGORITHM`] when the cert declares
+/// no preferred-hash subpacket (e.g. keyfork-generated certs) or none we accept.
+fn select_signing_hash(cert_algos: Option<&[HashAlgorithm]>) -> HashAlgorithm {
+    cert_algos
+        .and_then(|cert_algos| {
+            rpgpie::policy::PREFERRED_HASH_ALGORITHMS
+                .iter()
+                .find(|algo| cert_algos.contains(algo))
+                .copied()
+        })
+        .unwrap_or(DEFAULT_HASH_ALGORITHM)
 }
 
 fn find_open_cards_by_certs(
@@ -65,29 +78,10 @@ fn find_open_cards_by_certs(
         };
 
         if let Some(checked) = index.lookup_fingerprint(&fpr).into_iter().next() {
-            let cert_algos = match checked.preferred_hash_algo(pgp::types::Timestamp::now()) {
-                Some(o) => o,
-                None => {
-                    errors.push(Box::new(NoHashAlgo {
-                        fpr: checked.fingerprint().clone(),
-                    }));
-                    continue;
-                }
-            };
-            let preferred_hash_algo = match rpgpie::policy::PREFERRED_HASH_ALGORITHMS
-                .iter()
-                .find(|algo| cert_algos.contains(algo))
-            {
-                Some(algo) => algo,
-                None => {
-                    errors.push(Box::new(NoHashAlgo {
-                        fpr: checked.fingerprint().clone(),
-                    }));
-                    continue;
-                }
-            };
+            let preferred_hash_algo =
+                select_signing_hash(checked.preferred_hash_algo(pgp::types::Timestamp::now()));
 
-            return Ok(Some((card, *preferred_hash_algo)));
+            return Ok(Some((card, preferred_hash_algo)));
         }
     }
 
@@ -131,16 +125,8 @@ pub fn sign(
             let cert = rpgpie::certificate::Certificate::from(tsk.clone());
             let checked = Checked::from(cert);
 
-            let Some(cert_algos) = checked.preferred_hash_algo(pgp::types::Timestamp::now()) else {
-                continue;
-            };
-            let hash_algo = match rpgpie::policy::PREFERRED_HASH_ALGORITHMS
-                .iter()
-                .find(|algo| cert_algos.contains(algo))
-            {
-                Some(algo) => *algo,
-                None => continue,
-            };
+            let hash_algo =
+                select_signing_hash(checked.preferred_hash_algo(pgp::types::Timestamp::now()));
 
             for data_signer in tsk.signing_capable_component_keys() {
                 let fp = data_signer.fingerprint();
@@ -247,9 +233,9 @@ pub fn sign(
             });
         }
 
-        let pin = keyfork_prompt::prompt_validated_passphrase(
+        let pin = super::card_prompt::validated_pin(
             prompt,
-            &format!("{message_template}\nRemaining PIN entry attempts: {attempts}\n\nPIN: "),
+            &format!("{}\n{message_template}\nRemaining PIN entry attempts: {attempts}\n\nPIN: ", super::card_prompt::SIGN),
             3,
             validator,
         )
@@ -276,7 +262,9 @@ pub fn sign(
         }
     }
 
-    let cs = CardSlot::init_from_card(&mut tx, KeyType::Signing, &|| {})
+    let cs = CardSlot::init_from_card(&mut tx, KeyType::Signing, &|| {
+        eprintln!("{} — touch the selected card to sign", super::card_prompt::SIGN);
+    })
         .with_contexts((), ErrorKind::InitCardSlot)?;
     let signature = cs
         .sign_data(
@@ -290,30 +278,30 @@ pub fn sign(
     rpgpie::signature::save(&[signature], true, &mut signature_armored_bytes)
         .with_contexts((), ErrorKind::EncodeSignedData)?;
 
+    eprintln!("✓ Encrypted submission signed");
     Ok(String::from_utf8(signature_armored_bytes).expect("ASCII armored values are always utf8"))
 }
 
-// Use the current system time, minus 60 seconds to account for drift, before ensuring a signature
-// is valid.
-pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), VerifyError> {
-    use VerifyErrorKind as ErrorKind;
-    // TODO: make use of this in combination with creation timestamp
-    let now = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(60))
-        .ok_or(VerifyError {
-            kind: ErrorKind::IncompatibleDrift,
-            source: None,
-            location: Location::caller(),
-        })?;
+/// Allow the same future clock skew as the WebAuthn holder verifier.
+const MAX_SIGNATURE_FUTURE_SKEW_SECS: u32 = 60;
 
+pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), VerifyError> {
+    verify_detached_at(certs, data, signature, pgp::types::Timestamp::now())
+}
+
+fn verify_detached_at(
+    certs: &str,
+    data: &str,
+    signature: &str,
+    now: pgp::types::Timestamp,
+) -> Result<(), VerifyError> {
+    use VerifyErrorKind as ErrorKind;
     let certificates = Certificate::load(&mut std::io::Cursor::new(certs))
         .with_contexts((), ErrorKind::LoadCertificates)?
         .into_iter()
         .map(Checked::from)
         .collect::<Vec<_>>();
 
-    // NOTE: .try_into() returns the Vec as the Err variant, which isn't std::error::Error.
-    // This isn't my prettiest code, for sure.
     let [signature] = &rpgpie::signature::load(&mut std::io::Cursor::new(signature))
         .with_contexts((), ErrorKind::LoadSignatures)?[..]
     else {
@@ -324,37 +312,82 @@ pub fn verify_detached(certs: &str, data: &str, signature: &str) -> Result<(), V
         });
     };
 
-    let mut has_valid_signature = false;
     let mut validation_errors = vec![];
-
     for cert in certificates {
-        if let Some(creation_timestamp) = signature.created() {
-            // verify that the certificate is valid when the signature was created
-            // NOTE: we don't check that certificates are valid _at this point in time_.
-            // should we? having to update a bundle would lead to misreproduction in enclaves.
-
-            // NOTE: rpgpie does not verify that certificates are valid at time of signature
-            for verification in cert
-                .valid_signing_capable_component_keys_at(creation_timestamp)
-                .into_iter()
-                .map(|verifier| verifier.verify(signature, data.as_bytes()))
-            {
-                if let Err(e) = verification {
-                    validation_errors.push(e.into());
-                } else {
-                    has_valid_signature = true;
+        if let Some(created) = signature.created() {
+            // Preserve eligibility at signing time, including certificate validity,
+            // revocation, signing capability and the subkey's binding/back-signature.
+            for verifier in cert.valid_signing_capable_component_keys_at(created) {
+                let key = verifier.as_componentkey();
+                if created < cert.primary_creation_time() || created < key.created_at() {
+                    continue;
+                }
+                // Component verification retains algorithm policy and cryptography.
+                // SignatureVerifier::verify adds a zero-skew clock check, so enforce
+                // its temporal bounds here instead, without changing the signed data.
+                match key.verify(signature, data.as_bytes()) {
+                    Err(error) => validation_errors.push(error.into()),
+                    Ok(()) => {
+                        let ahead_seconds = created.as_secs().saturating_sub(now.as_secs());
+                        if ahead_seconds > MAX_SIGNATURE_FUTURE_SKEW_SECS {
+                            return Err(VerifyError {
+                                kind: ErrorKind::SignatureFromFuture,
+                                source: None,
+                                location: Location::caller(),
+                            });
+                        }
+                        return Ok(());
+                    }
                 }
             }
         }
     }
 
-    if !has_valid_signature {
-        return Err(VerifyError {
-            kind: VerifyErrorKind::AllSignaturesInvalid { validation_errors },
-            source: None,
-            location: Location::caller(),
-        });
+    Err(VerifyError {
+        kind: ErrorKind::AllSignaturesInvalid { validation_errors },
+        source: None,
+        location: Location::caller(),
+    })
+}
+
+#[cfg(test)]
+#[path = "signature_time_tests.rs"]
+mod signature_time_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_HASH_ALGORITHM, select_signing_hash};
+    use pgp::crypto::hash::HashAlgorithm;
+
+    #[test]
+    fn falls_back_to_default_when_no_preferences() {
+        // keyfork-generated certs declare no preferred-hash subpacket.
+        assert_eq!(select_signing_hash(None), DEFAULT_HASH_ALGORITHM);
+        // An empty preference list also falls back.
+        assert_eq!(select_signing_hash(Some(&[])), DEFAULT_HASH_ALGORITHM);
     }
 
-    return Ok(());
+    #[test]
+    fn falls_back_when_no_preference_is_accepted() {
+        // Cert only declares a hash we don't accept (SHA-1) -> default.
+        assert_eq!(
+            select_signing_hash(Some(&[HashAlgorithm::Sha1])),
+            DEFAULT_HASH_ALGORITHM
+        );
+    }
+
+    #[test]
+    fn uses_our_preference_order_among_accepted_hashes() {
+        // Single accepted preference is honored.
+        assert_eq!(
+            select_signing_hash(Some(&[HashAlgorithm::Sha256])),
+            HashAlgorithm::Sha256
+        );
+        // When the cert lists several, our order (SHA512 first) wins regardless
+        // of the cert's ordering.
+        assert_eq!(
+            select_signing_hash(Some(&[HashAlgorithm::Sha384, HashAlgorithm::Sha512])),
+            HashAlgorithm::Sha512
+        );
+    }
 }

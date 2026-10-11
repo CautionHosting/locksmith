@@ -3,26 +3,34 @@ name = "locksmith"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+publish.workspace = true
 
 [features]
+unsafe-e2e = []
 default = ["rpgpie"]
 rpgpie = [
+	"dep:rpassword",
+	"dep:crossterm",
 	"dep:card-backend-pcsc",
 	"dep:openpgp-card",
 	"dep:openpgp-card-rpgp",
 	"dep:pgp",
 	"dep:rpgpie",
 	"dep:card-backend",
+	"dep:openpgp-card-sequoia",
 ]
 
 [dependencies]
 # rpgpie
+rpassword = { version = "7.5.4", optional = true }
+crossterm = { version = "0.29", default-features = false, optional = true }
 pgp = { version = "0.19.0", optional = true }
 rpgpie = { version = "0.9.0", optional = true }
 openpgp-card = { version = "0.6.0", optional = true }
 card-backend = { version = "0.2.0", optional = true }
 card-backend-pcsc = { version = "0.5.1", optional = true }
 openpgp-card-rpgp = { version = "0.7.0", optional = true }
+openpgp-card-sequoia = { version = "0.2.2", optional = true }
 
 cfg-if = "1.0.4"
 structstruck = "0.5.1"
@@ -41,8 +49,8 @@ keymaker-models = { version = "0.1.0", path = "../keymaker-models" }
 
 rand = "0.8"
 smex = "0.2.0"
-bootproof = { git = "https://git.distrust.co/public/bootproof", version = "0.1.0" }
-bootproof-sdk = { git = "https://git.distrust.co/public/bootproof", version = "0.1.0" }
+bootproof = { git = "https://codeberg.org/caution/bootproof.git", rev = "2590edb0f23cae6589bc73cc8324673023ac1deb", version = "0.1.0" }
+bootproof-sdk = { git = "https://codeberg.org/caution/bootproof.git", rev = "2590edb0f23cae6589bc73cc8324673023ac1deb", version = "0.1.0" }
 x25519-dalek = { version = "2.0.1", features = ["getrandom"] }
 hkdf = "0.12.4"
 sha2 = "0.10.0"
@@ -62,3 +70,10 @@ ed25519-dalek = "2.2.0"
 sequoia-openpgp = "1"
 anyhow = "1.0.102"
 shlex = "1.3.0"
+
+webauthn-rs = "0.5.5"
+webauthn-rs-proto = "0.5.5"
+
+[dev-dependencies]
+tokio = { version = "1.50.0", features = ["test-util"] }
+webauthn-authenticator-rs = { version = "0.5.5", default-features = false, features = ["softpasskey"] }

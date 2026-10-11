@@ -2,7 +2,8 @@
 name = "keymaker-client"
 version = "0.1.0"
 edition = "2024"
-license.workspace = true
+license = "MIT"
+publish.workspace = true
 
 [dependencies]
 keymaker-models = { version = "0.1.0", path = "../keymaker-models" }
@@ -11,5 +12,6 @@ serde = "1.0.228"
 thiserror = "2.0.18"
 
 [dev-dependencies]
+sequoia-openpgp = "1"
 serde_json = "1.0.149"
 tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
