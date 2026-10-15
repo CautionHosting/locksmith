@@ -6,17 +6,16 @@ COPY --from=stagex/core-gmp@sha256:b69f72317a6a674e2b88c074bce0e7d11fc7b9df2f358
 COPY --from=stagex/user-pcsc-lite@sha256:baf390270d5a5e9a2daa3a5a99f346557f2111d801cd8f35050e36360ab3a7f8 . /
 COPY . .
 ENV RUST_BACKTRACE=1
-# If the forge is unavailable, fetch the same locked revisions from GitHub.
-# These transport-only aliases preserve canonical and historical lockfile URLs.
+# If the forge is unavailable, fetch the same locked revisions from the GitHub
+# mirror. insteadOf only rewrites transport, so Cargo.lock and the build output
+# are unchanged.
 RUN <<-EOF
 	ARCH="$(uname -m)"
 	cargo fetch --locked --target "${ARCH}-unknown-linux-musl" || \
 		CARGO_NET_GIT_FETCH_WITH_CLI=true \
-		GIT_CONFIG_COUNT=2 \
+		GIT_CONFIG_COUNT=1 \
 		GIT_CONFIG_KEY_0=url.https://github.com/CautionHosting/.insteadOf \
 		GIT_CONFIG_VALUE_0=https://git.caution.co/public/ \
-		GIT_CONFIG_KEY_1=url.https://github.com/CautionHosting/.insteadOf \
-		GIT_CONFIG_VALUE_1=https://codeberg.org/caution/ \
 		cargo fetch --locked --target "${ARCH}-unknown-linux-musl"
 EOF
 RUN --network=none <<-EOF

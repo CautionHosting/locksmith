@@ -9,7 +9,7 @@ publish.workspace = true
 locksmith = { path = "../locksmith" }
 dterror = "0.1.0"
 anyhow = "1.0.102"
-bootproof = { git = "https://git.caution.co/public/bootproof.git", rev = "2590edb0f23cae6589bc73cc8324673023ac1deb", version = "0.1.0" }
+bootproof = { workspace = true }
 axum = { version = "0.8.8", features = ["macros"] }
 hex = "0.4.3"
 keyfork-derive-openpgp = { version = "0.2.1", registry = "distrust", default-features = false }
