@@ -6,7 +6,7 @@ enclave "default" {
 
   build {
     app_sources = [
-      "https://codeberg.org/caution/locksmith"
+      "https://git.caution.co/public/locksmith"
     ]
   }
 
