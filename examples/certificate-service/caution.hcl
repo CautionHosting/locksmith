@@ -2,7 +2,7 @@
 enclave "default" {
   build {
     containerfile = "examples/certificate-service/Containerfile"
-    app_sources = ["https://codeberg.org/caution/locksmith"]
+    app_sources = ["https://git.caution.co/public/locksmith"]
   }
   resources {
     cpu = 2
