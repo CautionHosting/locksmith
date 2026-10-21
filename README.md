@@ -1,3 +1,5 @@
+This repository may be mirrored on other Git forges. The [canonical repository](https://git.caution.co/public/locksmith) is hosted on git.caution.co.
+
 # Locksmith workspace
 
 ## Keymaker v1 validation
