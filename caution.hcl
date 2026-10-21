@@ -11,6 +11,11 @@ enclave "default" {
   }
 
   network {
+    http {
+      port   = 8080
+      domain = "keymaker.caution.co"
+    }
+
     ingress {
       cidr_ipv4 = "0.0.0.0/0"
       port = 8080
