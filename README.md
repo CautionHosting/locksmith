@@ -120,3 +120,7 @@ that exactly one child test passed, so a renamed test cannot silently skip a gat
 Local
 mixed-generation tests use fake proofs and do not establish Nitro readiness.
 See [Locksmith usage and verification limits](crates/locksmith/README.md).
+
+## Source repository
+
+Canonical source: https://git.caution.co/public/locksmith.

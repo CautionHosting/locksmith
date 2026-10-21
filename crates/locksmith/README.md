@@ -82,7 +82,7 @@ the deterministic nonce and expected canonical bundle hash before returning the
 payload; Locksmith preserves its bundle-hash mismatch diagnostic. PCR-policy
 expiry is a cutoff on the authenticated generation time, not the time the saved bundle is loaded:
 a proof generated before the cutoff can remain valid after certificate expiry.
-This follows [the timestamp policy in #7](https://codeberg.org/caution/locksmith/issues/7#issuecomment-19223141).
+This follows [the timestamp policy in #7](https://git.caution.co/public/locksmith/issues/7#issuecomment-175).
 
 `bundle::load_response_with_timestamp` returns the verified bundle and
 `Some(SystemTime)` from the signed attestation, allowing callers to validate
@@ -120,8 +120,8 @@ separate processes. Build the mock Keymaker with
 it with the same environment flag. Never use these binaries or PCR values in a
 production deployment. This exercises PGP orchestration, not attestation security.
 
-[Design #7](https://codeberg.org/caution/locksmith/issues/7) remains authoritative:
-V0 fallback/upgrade is deferred under [#11](https://codeberg.org/caution/locksmith/issues/11)
-and PR #15; WebAuthn recryption is under [#12](https://codeberg.org/caution/locksmith/issues/12).
+[Design #7](https://git.caution.co/public/locksmith/issues/7) remains authoritative:
+V0 fallback/upgrade is deferred under [#11](https://git.caution.co/public/locksmith/issues/11)
+and PR #15; WebAuthn recryption is under [#12](https://git.caution.co/public/locksmith/issues/12).
 This test hook completes neither ticket. Real Nitro validation and production
 policy provisioning remain release dependencies.
