@@ -16,6 +16,19 @@ enclave "default" {
       port = 8080
       ip_protocol = "tcp"
     }
+
+    # Requried for TLS
+    egress {
+      cidr_ipv4 = "0.0.0.0/0"
+    }
+
+    http {
+      domain = "keymaker.caution.co"
+      port = 8080
+      e2e_encryption {
+        mode = "tls"
+      }
+    }
   }
 
   unit "default" {
