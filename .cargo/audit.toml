@@ -1,0 +1,10 @@
+# Advisories with no fix reachable from this workspace. Remove each entry once
+# its upstream blocker is resolved.
+[advisories]
+ignore = [
+	# crypto-bigint 0.5 timing variability; fix needs crypto-bigint >=0.7.6,
+	# blocked on pgp and keyfork moving to the next RustCrypto major release.
+	"RUSTSEC-2026-0387",
+	# rsa Marvin attack; no fixed release exists upstream.
+	"RUSTSEC-2023-0071",
+]
