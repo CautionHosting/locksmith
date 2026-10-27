@@ -13,7 +13,7 @@ enclave "default" {
   network {
     http {
       port   = 8080
-      domain = "keymaker.caution.co"
+      domain = "hosted-keymaker.caution.co"
     }
 
     ingress {
